@@ -1,0 +1,164 @@
+rules_version = '2'; 
+ 
+service cloud.firestore { 
+  match /databases/{database}/documents { 
+    function registrationPath() { 
+      return /databases/$(database)/documents/system/registration; 
+    } 
+ 
+    function signedIn() { 
+      return request.auth != null; 
+    } 
+ 
+    function currentProfile() { 
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)); 
+    } 
+ 
+    function isApprovedAdmin() { 
+      return signedIn() 
+        && currentProfile().data.status == "approved" 
+        && currentProfile().data.role in ["super_admin", "admin"]; 
+    } 
+ 
+    function isSuperAdmin() { 
+      return signedIn() 
+        && currentProfile().data.status == "approved" 
+        && currentProfile().data.role == "super_admin"; 
+    } 
+ 
+    function isBootstrapSuperAdmin(userId) { 
+      return signedIn() 
+        && request.auth.uid == "fTHaa7C31vSL8XZuPeXbEEtc23F3" 
+        && userId == "fTHaa7C31vSL8XZuPeXbEEtc23F3" 
+        && request.resource.data.email == "wizardvon@gmail.com"; 
+    } 
+ 
+    function validUserBase(userId) { 
+      return signedIn() 
+        && request.auth.uid == userId 
+        && request.resource.data.userId == userId 
+        && request.resource.data.email is string 
+        && request.resource.data.fullName is string 
+        && request.resource.data.createdAt == request.time 
+        && request.resource.data.keys().hasOnly([ 
+          "userId", 
+          "fullName", 
+          "email", 
+          "role", 
+          "status", 
+          "createdAt" 
+        ]); 
+    } 
+ 
+    function validFirstUser(userId) { 
+      return validUserBase(userId) 
+        && !exists(registrationPath()) 
+        && request.resource.data.role == "super_admin" 
+        && request.resource.data.status == "approved"; 
+    } 
+ 
+    function validBootstrapUser(userId) { 
+      return signedIn() 
+        && isBootstrapSuperAdmin(userId) 
+        && request.resource.data.userId == userId 
+        && request.resource.data.fullName is string 
+        && request.resource.data.createdAt is timestamp 
+        && request.resource.data.role == "super_admin" 
+        && request.resource.data.status == "approved" 
+        && request.resource.data.keys().hasOnly([ 
+          "userId", 
+          "fullName", 
+          "email", 
+          "role", 
+          "status", 
+          "createdAt" 
+        ]); 
+    } 
+ 
+    function validPendingUser(userId) { 
+      return validUserBase(userId) 
+        && exists(registrationPath()) 
+        && request.resource.data.role in ["admin", "viewer"] 
+        && request.resource.data.status == "pending"; 
+    } 
+ 
+    function validRegistrationCreate() { 
+      return signedIn() 
+        && !exists(registrationPath()) 
+        && request.resource.data.userCount == 1 
+        && request.resource.data.firstSuperAdminId in [ 
+          request.auth.uid, 
+          "fTHaa7C31vSL8XZuPeXbEEtc23F3" 
+        ] 
+        && request.resource.data.updatedAt == request.time 
+        && request.resource.data.keys().hasOnly([ 
+          "userCount", 
+          "firstSuperAdminId", 
+          "updatedAt" 
+        ]); 
+    } 
+ 
+    function validRegistrationUpdate() { 
+      return signedIn() 
+        && exists(registrationPath()) 
+        && ( 
+          request.resource.data.userCount == resource.data.userCount + 1 
+          || ( 
+            request.auth.uid == "fTHaa7C31vSL8XZuPeXbEEtc23F3" 
+            && request.resource.data.userCount == resource.data.userCount 
+          ) 
+        ) 
+        && request.resource.data.firstSuperAdminId in [ 
+          resource.data.firstSuperAdminId, 
+          "fTHaa7C31vSL8XZuPeXbEEtc23F3" 
+        ] 
+        && request.resource.data.updatedAt == request.time 
+        && request.resource.data.keys().hasOnly([ 
+          "userCount", 
+          "firstSuperAdminId", 
+          "updatedAt" 
+        ]); 
+    } 
+ 
+    match /users/{userId} { 
+      allow read: if signedIn() && (request.auth.uid == userId || isApprovedAdmin()); 
+      allow create: if validFirstUser(userId) || validBootstrapUser(userId) || validPendingUser(userId); 
+      allow update: if isSuperAdmin() || validBootstrapUser(userId); 
+      allow delete: if isSuperAdmin(); 
+    } 
+ 
+    match /system/{docId} { 
+      allow get: if (signedIn() && docId == "registration") || isApprovedAdmin(); 
+      allow list: if isApprovedAdmin(); 
+      allow create: if docId == "registration" && validRegistrationCreate(); 
+      allow update: if docId == "registration" && validRegistrationUpdate(); 
+    } 
+ 
+    match /{loadingCollection}/{recordId} { 
+      allow read: if signedIn() 
+        && currentProfile().data.status == "approved" 
+        && loadingCollection in [ 
+          "teachers", 
+          "subjects", 
+          "sections", 
+          "curriculumMappings", 
+          "loadAssignments",
+          "classSchedules",
+          "savedSchedules",
+          "ancillaryLoads" 
+        ]; 
+ 
+      allow create, update, delete: if isApprovedAdmin() 
+        && loadingCollection in [ 
+          "teachers", 
+          "subjects", 
+          "sections", 
+          "curriculumMappings", 
+          "loadAssignments",
+          "classSchedules",
+          "savedSchedules",
+          "ancillaryLoads" 
+        ]; 
+    } 
+  } 
+} 
