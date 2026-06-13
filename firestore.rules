@@ -39,6 +39,8 @@ service cloud.firestore {
         && request.resource.data.userId == userId 
         && request.resource.data.email is string 
         && request.resource.data.fullName is string 
+        && validUserRole(request.resource.data.role)
+        && validModulePermissions()
         && request.resource.data.createdAt == request.time 
         && request.resource.data.keys().hasOnly([ 
           "userId", 
@@ -46,6 +48,7 @@ service cloud.firestore {
           "email", 
           "role", 
           "status", 
+          "modulePermissions",
           "createdAt" 
         ]); 
     } 
@@ -65,12 +68,14 @@ service cloud.firestore {
         && request.resource.data.createdAt is timestamp 
         && request.resource.data.role == "super_admin" 
         && request.resource.data.status == "approved" 
+        && validModulePermissions()
         && request.resource.data.keys().hasOnly([ 
           "userId", 
           "fullName", 
           "email", 
           "role", 
           "status", 
+          "modulePermissions",
           "createdAt" 
         ]); 
     } 
@@ -78,7 +83,15 @@ service cloud.firestore {
     function validPendingUser(userId) { 
       return validUserBase(userId) 
         && exists(registrationPath()) 
-        && request.resource.data.role in ["admin", "viewer"] 
+        && request.resource.data.role in [
+          "principal",
+          "master_teacher",
+          "teacher",
+          "registrar",
+          "administrative_officer",
+          "administrative_assistant",
+          "admin"
+        ] 
         && request.resource.data.status == "pending"; 
     } 
  
@@ -119,6 +132,175 @@ service cloud.firestore {
           "updatedAt" 
         ]); 
     } 
+
+    function validOptionalString(fieldName) {
+      return !request.resource.data.keys().hasAny([fieldName])
+        || request.resource.data[fieldName] is string;
+    }
+
+    function validOptionalBool(fieldName) {
+      return !request.resource.data.keys().hasAny([fieldName])
+        || request.resource.data[fieldName] is bool;
+    }
+
+    function validOptionalTimestamp(fieldName) {
+      return !request.resource.data.keys().hasAny([fieldName])
+        || request.resource.data[fieldName] is timestamp;
+    }
+
+    function validUserRole(role) {
+      return role in [
+        "principal",
+        "master_teacher",
+        "teacher",
+        "registrar",
+        "administrative_officer",
+        "administrative_assistant",
+        "admin",
+        "super_admin"
+      ];
+    }
+
+    function validAppModule(moduleId) {
+      return moduleId in [
+        "dashboard",
+        "loading",
+        "teachers",
+        "subjects",
+        "sections",
+        "curriculum_mapping",
+        "load_assignment",
+        "scheduler",
+        "teacher_loads",
+        "reports",
+        "settings",
+        "backup_restore",
+        "users"
+      ];
+    }
+
+    function validModulePermissions() {
+      return request.resource.data.modulePermissions is list
+        && request.resource.data.modulePermissions.size() <= 13
+        && request.resource.data.modulePermissions.hasOnly([
+          "dashboard",
+          "loading",
+          "teachers",
+          "subjects",
+          "sections",
+          "curriculum_mapping",
+          "load_assignment",
+          "scheduler",
+          "teacher_loads",
+          "reports",
+          "settings",
+          "backup_restore",
+          "users"
+        ]);
+    }
+
+    function validClassSchedule(scheduleId) {
+      return request.resource.data.scheduleId == scheduleId
+        && request.resource.data.schoolYear is string
+        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
+        && request.resource.data.gradeLevel is string
+        && request.resource.data.strand is string
+        && request.resource.data.sectionId is string
+        && request.resource.data.subjectId is string
+        && request.resource.data.teacherId is string
+        && request.resource.data.day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        && request.resource.data.startTime is string
+        && request.resource.data.endTime is string
+        && request.resource.data.duration is number
+        && request.resource.data.duration > 0
+        && request.resource.data.slotId is string
+        && request.resource.data.sourceAssignmentId is string
+        && validOptionalString("room")
+        && validOptionalBool("locked")
+        && validOptionalString("templateType")
+        && validOptionalTimestamp("createdAt")
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "scheduleId",
+          "schoolYear",
+          "term",
+          "gradeLevel",
+          "strand",
+          "sectionId",
+          "subjectId",
+          "teacherId",
+          "room",
+          "day",
+          "startTime",
+          "endTime",
+          "duration",
+          "slotId",
+          "sourceAssignmentId",
+          "locked",
+          "templateType",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validSavedSchedule(savedScheduleId) {
+      return request.resource.data.savedScheduleId == savedScheduleId
+        && request.resource.data.name is string
+        && request.resource.data.schoolYear is string
+        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
+        && request.resource.data.gradeLevel is string
+        && request.resource.data.strand is string
+        && request.resource.data.entries is list
+        && request.resource.data.entryCount == request.resource.data.entries.size()
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && validOptionalString("createdBy")
+        && request.resource.data.keys().hasOnly([
+          "savedScheduleId",
+          "name",
+          "schoolYear",
+          "term",
+          "gradeLevel",
+          "strand",
+          "entries",
+          "entryCount",
+          "createdBy",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validSignatoryGroup(groupName) {
+      return request.resource.data[groupName] is map
+        && request.resource.data[groupName].keys().hasOnly([
+          "preparedBy",
+          "checkedBy",
+          "notedBy"
+        ])
+        && request.resource.data[groupName].preparedBy is map
+        && request.resource.data[groupName].preparedBy.name is string
+        && request.resource.data[groupName].preparedBy.position is string
+        && request.resource.data[groupName].preparedBy.keys().hasOnly(["name", "position"])
+        && request.resource.data[groupName].checkedBy is map
+        && request.resource.data[groupName].checkedBy.name is string
+        && request.resource.data[groupName].checkedBy.position is string
+        && request.resource.data[groupName].checkedBy.keys().hasOnly(["name", "position"])
+        && request.resource.data[groupName].notedBy is map
+        && request.resource.data[groupName].notedBy.name is string
+        && request.resource.data[groupName].notedBy.position is string
+        && request.resource.data[groupName].notedBy.keys().hasOnly(["name", "position"]);
+    }
+
+    function validSchedulePrintSettings() {
+      return validSignatoryGroup("classSchedule")
+        && validSignatoryGroup("teacherSchedule")
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "classSchedule",
+          "teacherSchedule",
+          "updatedAt"
+        ]);
+    }
  
     match /users/{userId} { 
       allow read: if signedIn() && (request.auth.uid == userId || isApprovedAdmin()); 
@@ -133,6 +315,26 @@ service cloud.firestore {
       allow create: if docId == "registration" && validRegistrationCreate(); 
       allow update: if docId == "registration" && validRegistrationUpdate(); 
     } 
+
+    match /classSchedules/{scheduleId} {
+      allow read: if signedIn() && currentProfile().data.status == "approved";
+      allow create, update: if isApprovedAdmin() && validClassSchedule(scheduleId);
+      allow delete: if isApprovedAdmin();
+    }
+
+    match /savedSchedules/{savedScheduleId} {
+      allow read: if signedIn() && currentProfile().data.status == "approved";
+      allow create: if isApprovedAdmin() && validSavedSchedule(savedScheduleId);
+      allow update, delete: if isApprovedAdmin();
+    }
+
+    match /appSettings/{settingId} {
+      allow read: if signedIn() && currentProfile().data.status == "approved";
+      allow create, update: if isApprovedAdmin()
+        && settingId == "schedulePrint"
+        && validSchedulePrintSettings();
+      allow delete: if false;
+    }
  
     match /{loadingCollection}/{recordId} { 
       allow read: if signedIn() 
@@ -143,8 +345,6 @@ service cloud.firestore {
           "sections", 
           "curriculumMappings", 
           "loadAssignments",
-          "classSchedules",
-          "savedSchedules",
           "ancillaryLoads" 
         ]; 
  
@@ -155,8 +355,6 @@ service cloud.firestore {
           "sections", 
           "curriculumMappings", 
           "loadAssignments",
-          "classSchedules",
-          "savedSchedules",
           "ancillaryLoads" 
         ]; 
     } 

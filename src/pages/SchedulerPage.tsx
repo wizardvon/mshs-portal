@@ -1,23 +1,34 @@
-import { CalendarDays, GripVertical, Lock, Printer, RefreshCw, RotateCcw, Trash2, Unlock } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, GripVertical, Lock, Printer, RefreshCw, RotateCcw, Trash2, Unlock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/common/PageHeader";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { useAuth } from "../providers/AuthProvider";
+import { subscribeAncillaryLoads } from "../services/ancillaryLoadService";
 import { subscribeLoadAssignmentsByPeriod } from "../services/assignmentService";
 import {
+  deleteSavedSchedule,
   replaceSchedulesByPeriod,
   resetSchedulesByContextSafely,
   saveNamedSchedule,
   subscribeClassSchedulesByPeriod,
   subscribeSavedSchedulesByContext,
 } from "../services/scheduleService";
+import {
+  defaultSchedulePrintSettings,
+  subscribeSchedulePrintSettings,
+} from "../services/settingsService";
 import { subscribeSections } from "../services/sectionService";
 import { subscribeSubjects } from "../services/subjectService";
 import { subscribeTeachers } from "../services/teacherService";
+import bagongPilipinasLogoUrl from "../assets/print/bagong-pilipinas-logo.png";
+import depedLogoUrl from "../assets/print/deped-logo.png";
+import mshsLogoUrl from "../assets/print/mshs-logo.png";
 import type {
   AcademicTerm,
+  AncillaryLoad,
   ClassScheduleEntry,
   LoadAssignment,
+  SchedulePrintSettings,
   SavedSchedule,
   ScheduleDay,
   Section,
@@ -216,6 +227,13 @@ function getSlots(gradeLevel: string) {
   return normalizeGrade(gradeLevel) === "12" ? grade12Slots : grade11AcademicSlots;
 }
 
+function getSlotsForEntryTemplate(entry: ClassScheduleEntry) {
+  if (entry.templateType === "grade12") return grade12Slots;
+  if (entry.templateType === "grade11_techpro") return grade11TechProSlots;
+  if (entry.templateType === "grade11_academic") return grade11AcademicSlots;
+  return getSlots(entry.gradeLevel);
+}
+
 function getBreaks(gradeLevel: string) {
   return gradeBreaks[normalizeGrade(gradeLevel)] ?? gradeBreaks["11"];
 }
@@ -227,6 +245,18 @@ function timeToMinutes(value: string) {
 
   if (hour < 7) hour += 12;
   return hour * 60 + minute;
+}
+
+function minutesToTime(value: number) {
+  const hour24 = Math.floor(value / 60);
+  const minute = value % 60;
+  const hour = hour24 > 12 ? hour24 - 12 : hour24;
+
+  return `${hour}:${String(minute).padStart(2, "0")}`;
+}
+
+function getEndTimeForDuration(startTime: string, duration: number) {
+  return minutesToTime(timeToMinutes(startTime) + duration * 60);
 }
 
 function timeRangesOverlap(startA: string, endA: string, startB: string, endB: string) {
@@ -334,6 +364,16 @@ function moveEntryToSlot(entry: ClassScheduleEntry, day: ScheduleDay, slot: Slot
   };
 }
 
+function moveEntryToManualSlot(entry: ClassScheduleEntry, day: ScheduleDay, slot: Slot): ClassScheduleEntry {
+  return {
+    ...entry,
+    day,
+    startTime: slot.startTime,
+    endTime: getEndTimeForDuration(slot.startTime, entry.duration),
+    slotId: slot.slotId,
+  };
+}
+
 function hasTeacherConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
   return currentSchedule.some(
     (item) =>
@@ -350,6 +390,16 @@ function hasSectionConflict(entry: ClassScheduleEntry, currentSchedule: ClassSch
   );
 }
 
+function hasSameSubjectTeacherSectionDayConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+  return currentSchedule.some(
+    (item) =>
+      item.sectionId === entry.sectionId &&
+      item.subjectId === entry.subjectId &&
+      item.teacherId === entry.teacherId &&
+      item.day === entry.day,
+  );
+}
+
 function hasRoomConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
   if (!entry.room) return false;
 
@@ -360,16 +410,26 @@ function hasRoomConflict(entry: ClassScheduleEntry, currentSchedule: ClassSchedu
   );
 }
 
-function hasHardConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+function hasHardConflict(
+  entry: ClassScheduleEntry,
+  currentSchedule: ClassScheduleEntry[],
+  options: { allowSameSubjectTeacherSectionDay?: boolean } = {},
+) {
   return (
     currentSchedule.some((item) => item.scheduleId === entry.scheduleId) ||
     hasTeacherConflict(entry, currentSchedule) ||
     hasSectionConflict(entry, currentSchedule) ||
+    (!options.allowSameSubjectTeacherSectionDay &&
+      hasSameSubjectTeacherSectionDayConflict(entry, currentSchedule)) ||
     hasRoomConflict(entry, currentSchedule)
   );
 }
 
-function getHardConflictReason(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+function getHardConflictReason(
+  entry: ClassScheduleEntry,
+  currentSchedule: ClassScheduleEntry[],
+  options: { allowSectionOverlap?: boolean; allowSameSubjectTeacherSectionDay?: boolean } = {},
+) {
   const duplicate = currentSchedule.find((item) => item.scheduleId === entry.scheduleId);
   if (duplicate) return "Cannot place here. Duplicate schedule entry.";
 
@@ -380,10 +440,25 @@ function getHardConflictReason(entry: ClassScheduleEntry, currentSchedule: Class
     return `Cannot place here. Teacher has an overlapping class (${teacherConflict.startTime}-${teacherConflict.endTime}).`;
   }
 
-  const sectionConflict = currentSchedule.find(
-    (item) => item.sectionId === entry.sectionId && entriesOverlap(item, entry),
-  );
-  if (sectionConflict) return "Cannot place here. Section already has a class.";
+  if (!options.allowSectionOverlap) {
+    const sectionConflict = currentSchedule.find(
+      (item) => item.sectionId === entry.sectionId && entriesOverlap(item, entry),
+    );
+    if (sectionConflict) return "Cannot place here. Section already has a class.";
+  }
+
+  if (!options.allowSameSubjectTeacherSectionDay) {
+    const sameSubjectTeacherSectionDayConflict = currentSchedule.find(
+      (item) =>
+        item.sectionId === entry.sectionId &&
+        item.subjectId === entry.subjectId &&
+        item.teacherId === entry.teacherId &&
+        item.day === entry.day,
+    );
+    if (sameSubjectTeacherSectionDayConflict) {
+      return "Cannot place here. The same subject-teacher for this section is already scheduled on this day.";
+    }
+  }
 
   const roomConflict = entry.room
     ? currentSchedule.find((item) => item.room === entry.room && entriesOverlap(item, entry))
@@ -477,6 +552,23 @@ function validateScheduleEntries(entries: ClassScheduleEntry[]) {
     seenEntryKeys.add(duplicateKey);
 
     entries.slice(index + 1).forEach((other) => {
+      if (
+        entry.sectionId === other.sectionId &&
+        entry.subjectId === other.subjectId &&
+        entry.teacherId === other.teacherId &&
+        entry.day === other.day
+      ) {
+        conflicts.push({
+          assignmentId: `${entry.sourceAssignmentId}-same-subject-teacher-section-day-${index}`,
+          type: "conflict",
+          subjectName: entry.subjectId,
+          sectionName: entry.sectionId,
+          teacherName: entry.teacherId,
+          reason: "Same subject-teacher is scheduled more than once for this section on the same day.",
+          sessions: 1,
+        });
+      }
+
       if (!entriesOverlap(entry, other)) return;
       if (entry.teacherId === other.teacherId) {
         conflicts.push({
@@ -654,12 +746,13 @@ function getCandidateSlots(session: RequiredSession, currentSchedule: ClassSched
       if (!session.preferElectiveSlot) return 0;
       return Number(second.slotId.includes("1400")) - Number(first.slotId.includes("1400"));
     });
-  const sameSubjectDays = new Set(
+  const sameSubjectTeacherSectionDays = new Set(
     currentSchedule
       .filter(
         (entry) =>
           entry.sectionId === session.assignment.sectionId &&
-          entry.subjectId === session.assignment.subjectId,
+          entry.subjectId === session.assignment.subjectId &&
+          entry.teacherId === session.assignment.teacherId,
       )
       .map((entry) => entry.day),
   );
@@ -667,8 +760,8 @@ function getCandidateSlots(session: RequiredSession, currentSchedule: ClassSched
     .flatMap((slot) => {
       const preferredDays = preferredDaysForSlot(session, slot, slots);
       const candidateDays = [
-        ...preferredDays.filter((day) => !sameSubjectDays.has(day)),
-        ...days.filter((day) => !preferredDays.includes(day) && !sameSubjectDays.has(day)),
+        ...preferredDays.filter((day) => !sameSubjectTeacherSectionDays.has(day)),
+        ...days.filter((day) => !preferredDays.includes(day) && !sameSubjectTeacherSectionDays.has(day)),
       ];
 
       return candidateDays.map((day) => ({ day, slot }));
@@ -682,6 +775,81 @@ function getCandidateSlots(session: RequiredSession, currentSchedule: ClassSched
         candidatePreferenceScore(session, second, slots, currentSchedule) -
         candidatePreferenceScore(session, first, slots, currentSchedule),
     );
+}
+
+function getAllCandidateSlots(session: RequiredSession) {
+  return getSlotsForSection(session.assignment.section, session.assignment.gradeLevel)
+    .filter((slot) => slot.duration === session.duration)
+    .flatMap((slot) => days.map((day) => ({ day, slot })));
+}
+
+function getPlacementBlockers(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+  return currentSchedule.filter(
+    (item) =>
+      item.scheduleId === entry.scheduleId ||
+      ((item.teacherId === entry.teacherId ||
+        item.sectionId === entry.sectionId ||
+        Boolean(entry.room && item.room === entry.room)) &&
+        entriesOverlap(item, entry)),
+  );
+}
+
+function hasSameSubjectTeacherDayOnlyConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+  return hasSameSubjectTeacherSectionDayConflict(entry, currentSchedule);
+}
+
+function explainUnscheduledSession(session: RequiredSession, currentSchedule: ClassScheduleEntry[]) {
+  const candidates = getAllCandidateSlots(session);
+  if (candidates.length === 0) {
+    return "No compatible slot exists for this subject duration in the section template.";
+  }
+
+  const counts = {
+    teacher: 0,
+    section: 0,
+    room: 0,
+    locked: 0,
+    sameDay: 0,
+  };
+
+  candidates.forEach((candidate) => {
+    const entry = createScheduleEntry(session, candidate.day, candidate.slot);
+    const blockers = currentSchedule.filter((item) => entriesOverlap(item, entry));
+
+    if (
+      currentSchedule.some(
+        (item) =>
+          item.sectionId === entry.sectionId &&
+          item.subjectId === entry.subjectId &&
+          item.teacherId === entry.teacherId &&
+          item.day === entry.day,
+      )
+    ) {
+      counts.sameDay += 1;
+    }
+
+    blockers.forEach((blocker) => {
+      if (blocker.locked) counts.locked += 1;
+      if (blocker.teacherId === entry.teacherId) counts.teacher += 1;
+      if (blocker.sectionId === entry.sectionId) counts.section += 1;
+      if (entry.room && blocker.room === entry.room) counts.room += 1;
+    });
+  });
+
+  const orderedReasons = [
+    { label: "teacher conflict", count: counts.teacher },
+    { label: "section conflict", count: counts.section },
+    { label: "room conflict", count: counts.room },
+    { label: "locked entries", count: counts.locked },
+    { label: "same subject-teacher already on that day", count: counts.sameDay },
+  ].sort((first, second) => second.count - first.count);
+  const primary = orderedReasons[0];
+
+  if (!primary || primary.count === 0) {
+    return "No valid conflict-free slot was available after checking teacher, section, room, and same-day subject rules.";
+  }
+
+  return `No valid slot was available. Mostly blocked by ${primary.label}.`;
 }
 
 function conflictForSession(session: RequiredSession, reason: string): Conflict {
@@ -845,7 +1013,7 @@ function scoreSchedule(
   });
 
   const unscheduledCount = Math.max(0, requiredSessions.length - scheduledEntries.length);
-  let score = scheduledEntries.length * (100 + 50 + 50 + 30);
+  let score = scheduledEntries.length * 1000000;
   const subjectDayCounts = new Map<string, Set<ScheduleDay>>();
   const subjectTotalCounts = new Map<string, number>();
 
@@ -856,9 +1024,9 @@ function scoreSchedule(
     subjectDayCounts.set(key, daysUsed);
     subjectTotalCounts.set(key, (subjectTotalCounts.get(key) ?? 0) + 1);
 
-    if (!entry.slotId.includes("1400")) score += 20;
+    if (!entry.slotId.includes("1400")) score += 200;
     if (normalizeGrade(entry.gradeLevel) === "11" && entry.duration === 2 && entry.slotId.includes("1400")) {
-      score += 120;
+      score += 500;
     }
     const assignment = requiredByAssignmentId.get(entry.sourceAssignmentId);
     const units = Number(assignment?.units || assignment?.subject.units || 0);
@@ -866,14 +1034,14 @@ function scoreSchedule(
       units === 12.5 &&
       getTemplateType(assignment?.section, entry.gradeLevel) === "grade11_techpro"
     ) {
-      score += entry.slotId === "g11-techpro-1400-1630" && entry.duration === 2.5 ? 400 : -2000;
+      score += entry.slotId === "g11-techpro-1400-1630" && entry.duration === 2.5 ? 2000 : -5000;
     }
   });
 
   subjectTotalCounts.forEach((count, key) => {
     const uniqueDays = subjectDayCounts.get(key)?.size ?? 0;
-    score += uniqueDays * 15;
-    score -= Math.max(0, count - uniqueDays) * 100;
+    score += uniqueDays * 150;
+    score -= Math.max(0, count - uniqueDays) * 700;
   });
 
   if (scheduledEntries.some((entry) => normalizeGrade(entry.gradeLevel) === "11")) {
@@ -882,7 +1050,7 @@ function scoreSchedule(
       const electiveCount = scheduledEntries.filter(
         (entry) => entry.sectionId === sectionId && entry.slotId.includes("1400"),
       ).length;
-      if (days.length - electiveCount === 1) score += 10;
+      if (days.length - electiveCount === 1) score += 100;
     });
   }
 
@@ -913,18 +1081,18 @@ function scoreSchedule(
   sectionDayCounts.forEach((counts) => {
     const usedCounts = counts.filter((count) => count > 0);
     if (usedCounts.length === 0) return;
-    score -= (Math.max(...usedCounts) - Math.min(...usedCounts)) * 25;
+    score -= (Math.max(...usedCounts) - Math.min(...usedCounts)) * 150;
   });
 
   sectionDaySlotIndexes.forEach((indexes) => {
     const sorted = [...new Set(indexes)].sort((first, second) => first - second);
     for (let index = 1; index < sorted.length; index += 1) {
-      score -= Math.max(0, sorted[index] - sorted[index - 1] - 1) * 15;
+      score -= Math.max(0, sorted[index] - sorted[index - 1] - 1) * 75;
     }
   });
 
   if (unscheduledCount > 0) {
-    score -= unscheduledCount * 500;
+    score -= unscheduledCount * 1000000;
     const sectionsWithEntries = new Set([
       ...requiredSessions.map((session) => session.assignment.sectionId),
       ...scheduledEntries.map((entry) => entry.sectionId),
@@ -958,20 +1126,277 @@ function scoreSchedule(
     score -= unusedValidSlots * 300;
   }
 
-  score -= specialConflicts.reduce((sum, conflict) => sum + conflict.sessions * 500, 0);
+  score -= specialConflicts.reduce((sum, conflict) => sum + conflict.sessions * 1000000, 0);
 
   return score;
 }
 
+function getSessionDifficultyScore(
+  session: RequiredSession,
+  remainingSessions: RequiredSession[],
+  currentSchedule: ClassScheduleEntry[],
+) {
+  const candidates = getCandidateSlots(session, currentSchedule);
+  const allCandidates = getAllCandidateSlots(session);
+  const teacherDemand = remainingSessions.filter(
+    (item) => item.assignment.teacherId === session.assignment.teacherId,
+  ).length;
+  const sectionDemand = remainingSessions.filter(
+    (item) => item.assignment.sectionId === session.assignment.sectionId,
+  ).length;
+  const roomDemand = session.assignment.section.room
+    ? remainingSessions.filter((item) => item.assignment.section.room === session.assignment.section.room).length
+    : 0;
+  const teacherOpenSlots = allCandidates.filter((candidate) => {
+    const entry = createScheduleEntry(session, candidate.day, candidate.slot);
+    return !currentSchedule.some(
+      (item) => item.teacherId === entry.teacherId && entriesOverlap(item, entry),
+    );
+  }).length;
+  const sectionOpenSlots = allCandidates.filter((candidate) => {
+    const entry = createScheduleEntry(session, candidate.day, candidate.slot);
+    return !currentSchedule.some(
+      (item) => item.sectionId === entry.sectionId && entriesOverlap(item, entry),
+    );
+  }).length;
+  const roomOpenSlots = session.assignment.section.room
+    ? allCandidates.filter((candidate) => {
+        const entry = createScheduleEntry(session, candidate.day, candidate.slot);
+        return !currentSchedule.some((item) => item.room === entry.room && entriesOverlap(item, entry));
+      }).length
+    : allCandidates.length;
+  const lockedBlockers = allCandidates.reduce((sum, candidate) => {
+    const entry = createScheduleEntry(session, candidate.day, candidate.slot);
+    return sum + getPlacementBlockers(entry, currentSchedule).filter((blocker) => blocker.locked).length;
+  }, 0);
+  const techProWeight = isFixedTechProAssignment(session.assignment) ? 1000 : 0;
+
+  return (
+    (100 - candidates.length) * 10000 +
+    Math.max(0, teacherDemand - teacherOpenSlots) * 1000 +
+    Math.max(0, sectionDemand - sectionOpenSlots) * 900 +
+    Math.max(0, roomDemand - roomOpenSlots) * 700 +
+    lockedBlockers * 250 +
+    techProWeight +
+    (10 - session.priority) * 20
+  );
+}
+
 function sortSessionsByDifficulty(sessions: RequiredSession[], currentSchedule: ClassScheduleEntry[]) {
   return [...sessions].sort((first, second) => {
-    const firstCandidates = getCandidateSlots(first, currentSchedule).length;
-    const secondCandidates = getCandidateSlots(second, currentSchedule).length;
+    const firstScore = getSessionDifficultyScore(first, sessions, currentSchedule);
+    const secondScore = getSessionDifficultyScore(second, sessions, currentSchedule);
 
-    if (firstCandidates !== secondCandidates) return firstCandidates - secondCandidates;
+    if (firstScore !== secondScore) return secondScore - firstScore;
     if (first.priority !== second.priority) return first.priority - second.priority;
     return first.assignment.section.sectionName.localeCompare(second.assignment.section.sectionName);
   });
+}
+
+type RepairOption = {
+  entries: ClassScheduleEntry[];
+  placedEntry: ClassScheduleEntry;
+  movedScheduleIds: string[];
+};
+
+function findExistingEntryMoveOptions(
+  entry: ClassScheduleEntry,
+  currentSchedule: ClassScheduleEntry[],
+  requiredSessions: RequiredSession[],
+  specialConflicts: Conflict[],
+  depth: number,
+  visitedScheduleIds: Set<string>,
+): RepairOption[] {
+  if (entry.locked || visitedScheduleIds.has(entry.scheduleId)) return [];
+
+  const slots = getSlotsForEntryTemplate(entry).filter(
+    (slot) => slot.duration === entry.duration,
+  );
+  const baseVisited = new Set(visitedScheduleIds);
+  baseVisited.add(entry.scheduleId);
+
+  return slots
+    .flatMap((slot) => days.map((day) => moveEntryToSlot(entry, day, slot)))
+    .filter(
+      (moved) =>
+        moved.day !== entry.day ||
+        moved.slotId !== entry.slotId ||
+        moved.startTime !== entry.startTime ||
+        moved.endTime !== entry.endTime,
+    )
+    .flatMap((moved) => {
+      if (hasSameSubjectTeacherDayOnlyConflict(moved, currentSchedule)) return [];
+
+      const blockers = getPlacementBlockers(moved, currentSchedule).filter(
+        (blocker) => blocker.scheduleId !== entry.scheduleId,
+      );
+      if (blockers.some((blocker) => blocker.locked)) return [];
+      if (blockers.length === 0) {
+        return [{ entries: [...currentSchedule, moved], placedEntry: moved, movedScheduleIds: [moved.scheduleId] }];
+      }
+      if (depth <= 0) return [];
+
+      const scheduleWithoutBlockers = currentSchedule.filter(
+        (item) =>
+          item.scheduleId !== entry.scheduleId &&
+          !blockers.some((blocker) => blocker.scheduleId === item.scheduleId),
+      );
+      const relocatedStates = relocateBlockers(
+        blockers,
+        scheduleWithoutBlockers,
+        requiredSessions,
+        specialConflicts,
+        depth - 1,
+        baseVisited,
+      );
+
+      return relocatedStates.map((state) => ({
+        entries: [...state.entries, moved],
+        placedEntry: moved,
+        movedScheduleIds: [moved.scheduleId, ...state.movedScheduleIds],
+      }));
+    })
+    .filter((option) => !getHardConflictReason(option.placedEntry, option.entries.filter((item) => item.scheduleId !== option.placedEntry.scheduleId)))
+    .sort(
+      (first, second) =>
+        first.movedScheduleIds.length - second.movedScheduleIds.length ||
+        scoreSchedule(second.entries, requiredSessions, specialConflicts) -
+          scoreSchedule(first.entries, requiredSessions, specialConflicts),
+    )
+    .slice(0, 6);
+}
+
+function relocateBlockers(
+  blockers: ClassScheduleEntry[],
+  baseEntries: ClassScheduleEntry[],
+  requiredSessions: RequiredSession[],
+  specialConflicts: Conflict[],
+  depth: number,
+  visitedScheduleIds: Set<string>,
+) {
+  type RelocationState = { entries: ClassScheduleEntry[]; movedScheduleIds: string[] };
+  let states: RelocationState[] = [{ entries: baseEntries, movedScheduleIds: [] }];
+
+  blockers.forEach((blocker) => {
+    const nextStates: RelocationState[] = [];
+
+    states.forEach((state) => {
+      const moveOptions = findExistingEntryMoveOptions(
+        blocker,
+        state.entries,
+        requiredSessions,
+        specialConflicts,
+        depth,
+        visitedScheduleIds,
+      );
+
+      moveOptions.forEach((option) => {
+        nextStates.push({
+          entries: option.entries,
+          movedScheduleIds: [...state.movedScheduleIds, ...option.movedScheduleIds],
+        });
+      });
+    });
+
+    states = nextStates
+      .sort(
+        (first, second) =>
+          first.movedScheduleIds.length - second.movedScheduleIds.length ||
+          scoreSchedule(second.entries, requiredSessions, specialConflicts) -
+            scoreSchedule(first.entries, requiredSessions, specialConflicts),
+      )
+      .slice(0, 6);
+  });
+
+  return states;
+}
+
+function findRepairOptionsForSession(
+  session: RequiredSession,
+  currentSchedule: ClassScheduleEntry[],
+  requiredSessions: RequiredSession[],
+  specialConflicts: Conflict[],
+  maxDepth = 2,
+): RepairOption[] {
+  return getAllCandidateSlots(session)
+    .flatMap((candidate) => {
+      const entry = createScheduleEntry(session, candidate.day, candidate.slot);
+      if (hasSameSubjectTeacherDayOnlyConflict(entry, currentSchedule)) return [];
+
+      const directConflictReason = getHardConflictReason(entry, currentSchedule);
+      if (!directConflictReason) {
+        return [{ entries: [...currentSchedule, entry], placedEntry: entry, movedScheduleIds: [] }];
+      }
+
+      const blockers = getPlacementBlockers(entry, currentSchedule);
+      if (blockers.length === 0 || blockers.some((blocker) => blocker.locked) || maxDepth <= 0) return [];
+
+      const scheduleWithoutBlockers = currentSchedule.filter(
+        (item) => !blockers.some((blocker) => blocker.scheduleId === item.scheduleId),
+      );
+      const relocatedStates = relocateBlockers(
+        blockers,
+        scheduleWithoutBlockers,
+        requiredSessions,
+        specialConflicts,
+        maxDepth - 1,
+        new Set(),
+      );
+
+      return relocatedStates
+        .map((state) => ({
+          entries: [...state.entries, entry],
+          placedEntry: entry,
+          movedScheduleIds: state.movedScheduleIds,
+        }))
+        .filter(
+          (option) =>
+            !getHardConflictReason(
+              option.placedEntry,
+              option.entries.filter((item) => item.scheduleId !== option.placedEntry.scheduleId),
+            ),
+        );
+    })
+    .sort(
+      (first, second) =>
+        first.movedScheduleIds.length - second.movedScheduleIds.length ||
+        scoreSchedule(second.entries, requiredSessions, specialConflicts) -
+          scoreSchedule(first.entries, requiredSessions, specialConflicts),
+    )
+    .slice(0, 6);
+}
+
+function repairUnscheduledSessions(
+  initialEntries: ClassScheduleEntry[],
+  remainingSessions: RequiredSession[],
+  requiredSessions: RequiredSession[],
+  specialConflicts: Conflict[],
+) {
+  let entries = [...initialEntries];
+  let remaining = [...remainingSessions];
+  const repairedScheduleIds = new Set<string>();
+  const movedScheduleIds = new Set<string>();
+
+  sortSessionsByDifficulty(remaining, entries).forEach((session) => {
+    if (!remaining.some((item) => item.sessionId === session.sessionId)) return;
+
+    const repair = findRepairOptionsForSession(
+      session,
+      entries,
+      requiredSessions,
+      specialConflicts,
+      2,
+    )[0];
+
+    if (!repair) return;
+
+    entries = repair.entries;
+    repairedScheduleIds.add(repair.placedEntry.scheduleId);
+    repair.movedScheduleIds.forEach((scheduleId) => movedScheduleIds.add(scheduleId));
+    remaining = remaining.filter((item) => item.sessionId !== session.sessionId);
+  });
+
+  return { entries, remainingSessions: remaining, repairedScheduleIds, movedScheduleIds };
 }
 
 function generateScheduleFastDraft(
@@ -980,13 +1405,9 @@ function generateScheduleFastDraft(
 ): GenerationResult {
   const entries: ClassScheduleEntry[] = [...lockedEntries];
   const { sessions: requiredSessions, conflicts } = buildRequiredSessions(assignments, lockedEntries);
+  const remainingSessions: RequiredSession[] = [];
 
-  requiredSessions.sort((first, second) => {
-    if (first.priority !== second.priority) return first.priority - second.priority;
-    return first.assignment.section.sectionName.localeCompare(second.assignment.section.sectionName);
-  });
-
-  requiredSessions.forEach((session) => {
+  sortSessionsByDifficulty(requiredSessions, entries).forEach((session) => {
     const candidates = getCandidateSlots(session, entries);
     const candidate = candidates[0];
 
@@ -995,19 +1416,23 @@ function generateScheduleFastDraft(
       return;
     }
 
-    conflicts.push(conflictForSession(session, "No valid conflict-free slot was available in the current draft order."));
+    remainingSessions.push(session);
   });
 
-  const validatedEntries = dedupeScheduleEntries(entries);
+  const repaired = repairUnscheduledSessions(entries, remainingSessions, requiredSessions, conflicts);
+  const unresolvedConflicts = repaired.remainingSessions.map((session) =>
+    conflictForSession(session, explainUnscheduledSession(session, repaired.entries)),
+  );
+  const validatedEntries = dedupeScheduleEntries(repaired.entries);
   const validationConflicts = validateScheduleEntries(validatedEntries);
 
   return {
     entries: validatedEntries,
-    conflicts: [...conflicts, ...validationConflicts],
+    conflicts: [...conflicts, ...unresolvedConflicts, ...validationConflicts],
     score: scoreSchedule(validatedEntries, requiredSessions, conflicts.filter((conflict) => conflict.type === "special")),
     ...getCompletionStats(
       validatedEntries,
-      conflicts.filter((conflict) => conflict.type === "unscheduled").length,
+      unresolvedConflicts.length,
       conflicts.filter((conflict) => conflict.type === "special"),
     ),
     combinationsTried: requiredSessions.length,
@@ -1382,8 +1807,8 @@ async function generateScheduleBestFit(
     const score = scoreSchedule(entries, requiredSessions, specialConflicts);
 
     if (
-      score > bestScore ||
-      (score === bestScore && remaining.length < bestRemaining.length)
+      remaining.length < bestRemaining.length ||
+      (remaining.length === bestRemaining.length && score > bestScore)
     ) {
       bestScore = score;
       bestEntries = [...entries];
@@ -1441,12 +1866,13 @@ async function generateScheduleBestFit(
   reportProgress();
   await search([...lockedEntries], requiredSessions);
 
-  const scheduledIds = new Set(bestEntries.map((entry) => entry.scheduleId));
+  const repaired = repairUnscheduledSessions(bestEntries, bestRemaining, requiredSessions, specialConflicts);
+  bestEntries = repaired.entries;
+  bestRemaining = repaired.remainingSessions;
+  bestScore = scoreSchedule(bestEntries, requiredSessions, specialConflicts);
+
   const unscheduledConflicts = bestRemaining.map((session) =>
-    conflictForSession(
-      session,
-      "Best Fit could not place this session without creating a teacher, section, or room conflict.",
-    ),
+    conflictForSession(session, explainUnscheduledSession(session, bestEntries)),
   );
   const scoreConflict: Conflict = {
     assignmentId: "optimization-score",
@@ -1461,7 +1887,7 @@ async function generateScheduleBestFit(
   const validationConflicts = validateScheduleEntries(validatedEntries);
 
   return {
-    entries: validatedEntries.filter((entry) => scheduledIds.has(entry.scheduleId)),
+    entries: validatedEntries,
     conflicts: [...specialConflicts, ...unscheduledConflicts, ...validationConflicts, scoreConflict],
     score: bestScore,
     ...getCompletionStats(validatedEntries, bestRemaining.length, specialConflicts),
@@ -1489,13 +1915,18 @@ export function SchedulerPage() {
   const [gradeLevel, setGradeLevel] = useState("all");
   const [strandFilter, setStrandFilter] = useState("all");
   const [viewMode, setViewMode] = useState<ViewMode>("section");
+  const [selectedSectionId, setSelectedSectionId] = useState("");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("fast");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [assignments, setAssignments] = useState<LoadAssignment[]>([]);
+  const [ancillaryLoads, setAncillaryLoads] = useState<AncillaryLoad[]>([]);
   const [savedEntries, setSavedEntries] = useState<ClassScheduleEntry[]>([]);
   const [savedSchedules, setSavedSchedules] = useState<SavedSchedule[]>([]);
+  const [schedulePrintSettings, setSchedulePrintSettings] = useState<SchedulePrintSettings>(
+    defaultSchedulePrintSettings,
+  );
   const [selectedSavedScheduleId, setSelectedSavedScheduleId] = useState("");
   const [scheduleName, setScheduleName] = useState("");
   const [draftEntries, setDraftEntries] = useState<ClassScheduleEntry[]>([]);
@@ -1521,6 +1952,7 @@ export function SchedulerPage() {
   const [autoPlotMode, setAutoPlotMode] = useState<AutoPlotMode>("empty");
   const [autoPlotScope, setAutoPlotScope] = useState<AutoPlotScope>("selected");
   const [preserveExistingSchedule, setPreserveExistingSchedule] = useState(true);
+  const [ignoreSameSubjectTeacherDayOnDrag, setIgnoreSameSubjectTeacherDayOnDrag] = useState(false);
   const [showResetConfirmation, setShowResetConfirmation] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -1534,6 +1966,8 @@ export function SchedulerPage() {
   useEffect(() => subscribeTeachers(setTeachers), []);
   useEffect(() => subscribeSubjects(setSubjects), []);
   useEffect(() => subscribeSections(setSections), []);
+  useEffect(() => subscribeAncillaryLoads(setAncillaryLoads), []);
+  useEffect(() => subscribeSchedulePrintSettings(setSchedulePrintSettings), []);
   useEffect(
     () => subscribeLoadAssignmentsByPeriod(schoolYear, term, setAssignments),
     [schoolYear, term],
@@ -1679,6 +2113,10 @@ export function SchedulerPage() {
         .sort((first, second) => first.sectionName.localeCompare(second.sectionName)),
     [joinedAssignments],
   );
+  const selectedSection = useMemo(
+    () => visibleSections.find((section) => section.sectionId === selectedSectionId) ?? visibleSections[0],
+    [selectedSectionId, visibleSections],
+  );
   const visibleTeachers = useMemo(
     () => {
       const teacherMap = new Map(
@@ -1696,6 +2134,28 @@ export function SchedulerPage() {
     },
     [joinedAssignments, teachersById, visibleEntries],
   );
+
+  useEffect(() => {
+    if (visibleSections.length === 0) {
+      if (selectedSectionId) setSelectedSectionId("");
+      return;
+    }
+
+    if (!visibleSections.some((section) => section.sectionId === selectedSectionId)) {
+      setSelectedSectionId(visibleSections[0].sectionId);
+    }
+  }, [selectedSectionId, visibleSections]);
+
+  useEffect(() => {
+    if (visibleTeachers.length === 0) {
+      if (selectedTeacherId) setSelectedTeacherId("");
+      return;
+    }
+
+    if (!visibleTeachers.some((teacher) => teacher.teacherId === selectedTeacherId)) {
+      setSelectedTeacherId(visibleTeachers[0].teacherId);
+    }
+  }, [selectedTeacherId, visibleTeachers]);
   const teacherPlotSummaries = useMemo(
     () =>
       visibleTeachers.map((teacher) => {
@@ -1903,6 +2363,7 @@ export function SchedulerPage() {
               bestFitMaxCombinations,
               (progress) => {
                 setDraftEntries(progress.entries);
+                setSavedEntries(progress.entries);
                 saveLocalDraft({
                   entries: progress.entries,
                   nextGenerationMessage: "Trying best fit combinations...",
@@ -1925,6 +2386,7 @@ export function SchedulerPage() {
           : generateScheduleFastDraft(joinedAssignments, lockedEntries);
 
       setDraftEntries(result.entries);
+      setSavedEntries(result.entries);
       setRecentlyChangedScheduleIds(new Set(result.entries.map((entry) => entry.scheduleId)));
       setPlacementLog(result.entries.slice(-12).reverse());
       setConflicts(result.conflicts);
@@ -2188,6 +2650,29 @@ export function SchedulerPage() {
     }
   }
 
+  async function handleDeleteNamedSchedule() {
+    if (!canEdit || isGenerating || isSaving || !selectedSavedSchedule) return;
+
+    const shouldDelete = window.confirm(
+      `Delete saved schedule "${selectedSavedSchedule.name}"? This will not delete the currently loaded timetable.`,
+    );
+    if (!shouldDelete) return;
+
+    setIsSaving(true);
+    setSaveMessage(`Deleting "${selectedSavedSchedule.name}"...`);
+
+    try {
+      await deleteSavedSchedule(selectedSavedSchedule.savedScheduleId);
+      setSelectedSavedScheduleId("");
+      setSaveMessage(`Deleted saved schedule "${selectedSavedSchedule.name}".`);
+    } catch (error) {
+      console.error(error);
+      setSaveMessage("Saved schedule delete failed.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   function handleAutoPlotTeachers() {
     if (!canEdit || isGenerating) return;
 
@@ -2225,6 +2710,7 @@ export function SchedulerPage() {
     });
 
     setDraftEntries(nextEntries);
+    setSavedEntries(nextEntries);
     setConflicts(nextConflicts);
     setRecentlyChangedScheduleIds(changedIds);
     setPlacementLog(nextEntries.filter((entry) => changedIds.has(entry.scheduleId)).slice(-12).reverse());
@@ -2307,7 +2793,7 @@ export function SchedulerPage() {
       : conflicts;
 
     setDraftEntries(updatedEntries);
-    setSavedEntries((current) => current.filter((item) => item.scheduleId !== entry.scheduleId));
+    setSavedEntries(updatedEntries);
     setConflicts(nextConflicts);
     setRecentlyChangedScheduleIds(new Set());
     setPlacementLog((current) => current.filter((item) => item.scheduleId !== entry.scheduleId));
@@ -2323,14 +2809,18 @@ export function SchedulerPage() {
     });
   }
 
+  function entryMatchesCell(entry: ClassScheduleEntry, entityField: "sectionId" | "teacherId", slot: Slot) {
+    if (entityField === "sectionId") return entry.slotId === slot.slotId;
+    if (entry.slotId === slot.slotId) return true;
+    return entry.startTime === slot.startTime && entry.endTime === slot.endTime;
+  }
+
   function entryFor(entityField: "sectionId" | "teacherId", entityId: string, day: ScheduleDay, slot: Slot) {
     return visibleEntries.find(
       (entry) =>
         entry[entityField] === entityId &&
         entry.day === day &&
-        (entityField === "teacherId"
-          ? entry.startTime === slot.startTime && entry.endTime === slot.endTime
-          : entry.slotId === slot.slotId),
+        entryMatchesCell(entry, entityField, slot),
     );
   }
 
@@ -2339,9 +2829,7 @@ export function SchedulerPage() {
       (entry) =>
         entry[entityField] === entityId &&
         entry.day === day &&
-        (entityField === "teacherId"
-          ? entry.startTime === slot.startTime && entry.endTime === slot.endTime
-          : entry.slotId === slot.slotId),
+        entryMatchesCell(entry, entityField, slot),
     );
   }
 
@@ -2356,11 +2844,34 @@ export function SchedulerPage() {
     };
   }
 
-  function canEntryUseSlot(entry: ClassScheduleEntry, slot: Slot) {
+  function moveEntryToManualSlot(entry: ClassScheduleEntry, day: ScheduleDay, slot: Slot): ClassScheduleEntry {
+    return {
+      ...entry,
+      day,
+      startTime: slot.startTime,
+      endTime: getEndTimeForDuration(slot.startTime, entry.duration),
+      slotId: slot.slotId,
+    };
+  }
+
+  function canEntryUseSlot(
+    entry: ClassScheduleEntry,
+    slot: Slot,
+    options: { allowShorterDuration?: boolean } = {},
+  ) {
     const section = sectionsById.get(entry.sectionId);
     return getSlotsForSection(section, entry.gradeLevel).some(
-      (gradeSlot) => gradeSlot.slotId === slot.slotId && gradeSlot.duration === entry.duration,
+      (gradeSlot) =>
+        gradeSlot.slotId === slot.slotId &&
+        (options.allowShorterDuration
+          ? entry.duration <= gradeSlot.duration && entry.duration <= slot.duration
+          : gradeSlot.duration === entry.duration),
     );
+  }
+
+  function getTemplateSlotForEntry(entry: ClassScheduleEntry) {
+    const section = sectionsById.get(entry.sectionId);
+    return getSlotsForSection(section, entry.gradeLevel).find((slot) => slot.slotId === entry.slotId);
   }
 
   function getNextSessionIndex(assignmentId: string) {
@@ -2369,26 +2880,30 @@ export function SchedulerPage() {
 
   function buildManualEntry(assignment: JoinedAssignment, day: ScheduleDay, slot: Slot): ClassScheduleEntry | null {
     const rule = sessionsForAssignment(assignment);
-    if (slot.duration !== rule.duration) return null;
+    if (slot.duration < rule.duration) return null;
+
+    const entry = createScheduleEntry(
+      {
+        sessionId: `${assignment.assignmentId}:manual:${Date.now()}`,
+        assignment,
+        duration: rule.duration,
+        sessionIndex: getNextSessionIndex(assignment.assignmentId),
+        totalSessions: rule.sessions,
+        priority: rule.priority,
+        units: Number(assignment.units || assignment.subject.units || 0),
+        preferElectiveSlot:
+          normalizeGrade(assignment.gradeLevel) === "11" &&
+          (Number(assignment.units || assignment.subject.units || 0) === 8 ||
+            Number(assignment.units || assignment.subject.units || 0) === 12.5),
+      },
+      day,
+      slot,
+    );
 
     return {
-      ...createScheduleEntry(
-        {
-          sessionId: `${assignment.assignmentId}:manual:${Date.now()}`,
-          assignment,
-          duration: rule.duration,
-          sessionIndex: getNextSessionIndex(assignment.assignmentId),
-          totalSessions: rule.sessions,
-          priority: rule.priority,
-          units: Number(assignment.units || assignment.subject.units || 0),
-          preferElectiveSlot:
-            normalizeGrade(assignment.gradeLevel) === "11" &&
-            (Number(assignment.units || assignment.subject.units || 0) === 8 ||
-              Number(assignment.units || assignment.subject.units || 0) === 12.5),
-        },
-        day,
-        slot,
-      ),
+      ...entry,
+      endTime: getEndTimeForDuration(slot.startTime, rule.duration),
+      duration: rule.duration,
       locked: true,
     };
   }
@@ -2413,6 +2928,10 @@ export function SchedulerPage() {
   function handleDropOnCell(targetEntry: ClassScheduleEntry | undefined, day: ScheduleDay, slot: Slot) {
     if ((!draggedScheduleId && !draggedConflictAssignmentId) || isGenerating) return;
 
+    const dragConflictOptions = {
+      allowSameSubjectTeacherSectionDay: ignoreSameSubjectTeacherDayOnDrag,
+    };
+
     if (draggedConflictAssignmentId) {
       const assignment = joinedAssignments.find((item) => item.assignmentId === draggedConflictAssignmentId);
       if (!assignment) {
@@ -2420,20 +2939,14 @@ export function SchedulerPage() {
         return;
       }
 
-      if (targetEntry) {
-        setLockMessage("Drop conflict items into an empty slot, or move the existing entry first.");
-        clearDragState();
-        return;
-      }
-
       const manualEntry = buildManualEntry(assignment, day, slot);
-      if (!manualEntry || !canEntryUseSlot(manualEntry, slot)) {
-        setLockMessage("Manual placement blocked because the target time slot does not match the subject duration or grade template.");
+      if (!manualEntry || !canEntryUseSlot(manualEntry, slot, { allowShorterDuration: true })) {
+        setLockMessage("Manual placement blocked because the target time slot is shorter than the subject duration or outside the grade template.");
         clearDragState();
         return;
       }
 
-      const manualConflictReason = getHardConflictReason(manualEntry, visibleEntries);
+      const manualConflictReason = getHardConflictReason(manualEntry, visibleEntries, dragConflictOptions);
       if (manualConflictReason) {
         setLockMessage(manualConflictReason);
         clearDragState();
@@ -2444,6 +2957,7 @@ export function SchedulerPage() {
       const updatedConflicts = getConflictsAfterPlaced(conflicts, assignment.assignmentId);
 
       setDraftEntries(updatedEntries);
+      setSavedEntries(updatedEntries);
       setRecentlyChangedScheduleIds(new Set([manualEntry.scheduleId]));
       setConflicts(updatedConflicts);
       setLockMessage("");
@@ -2464,30 +2978,39 @@ export function SchedulerPage() {
       return;
     }
 
-    const sourceSlot = {
+    const sourceSlot = getTemplateSlotForEntry(sourceEntry) ?? {
       slotId: sourceEntry.slotId,
       startTime: sourceEntry.startTime,
       endTime: sourceEntry.endTime,
       duration: sourceEntry.duration,
       label: `${sourceEntry.startTime}-${sourceEntry.endTime}`,
     };
-    const movedSource = moveEntryToSlot(sourceEntry, day, slot);
-    const movedTarget = targetEntry ? moveEntryToSlot(targetEntry, sourceEntry.day, sourceSlot) : undefined;
+    const movedSource = moveEntryToManualSlot(sourceEntry, day, slot);
+    const movedTarget = targetEntry ? moveEntryToManualSlot(targetEntry, sourceEntry.day, sourceSlot) : undefined;
     const otherEntries = visibleEntries.filter(
       (entry) =>
         entry.scheduleId !== sourceEntry.scheduleId &&
         entry.scheduleId !== targetEntry?.scheduleId,
     );
 
-    if (!canEntryUseSlot(sourceEntry, slot) || (targetEntry && !canEntryUseSlot(targetEntry, sourceSlot))) {
-      setLockMessage("Move blocked because the target time slot does not match the subject duration or grade template.");
+    if (
+      !canEntryUseSlot(sourceEntry, slot, { allowShorterDuration: true }) ||
+      (targetEntry && !canEntryUseSlot(targetEntry, sourceSlot, { allowShorterDuration: true }))
+    ) {
+      setLockMessage("Move blocked because the target time slot is shorter than the subject duration or outside the grade template.");
       clearDragState();
       return;
     }
 
     const moveConflictReason =
-      getHardConflictReason(movedSource, [...otherEntries, ...(movedTarget ? [movedTarget] : [])]) ||
-      (movedTarget ? getHardConflictReason(movedTarget, [...otherEntries, movedSource]) : "");
+      getHardConflictReason(
+        movedSource,
+        [...otherEntries, ...(movedTarget ? [movedTarget] : [])],
+        dragConflictOptions,
+      ) ||
+      (movedTarget
+        ? getHardConflictReason(movedTarget, [...otherEntries, movedSource], dragConflictOptions)
+        : "");
 
     if (moveConflictReason) {
       setLockMessage(moveConflictReason);
@@ -2502,12 +3025,7 @@ export function SchedulerPage() {
     });
 
     setDraftEntries(updatedEntries);
-    setSavedEntries((current) =>
-      current.map((entry) => {
-        const updated = updatedEntries.find((item) => item.scheduleId === entry.scheduleId);
-        return updated ?? entry;
-      }),
-    );
+    setSavedEntries(updatedEntries);
     setRecentlyChangedScheduleIds(
       new Set([sourceEntry.scheduleId, ...(movedTarget ? [movedTarget.scheduleId] : [])]),
     );
@@ -2516,38 +3034,327 @@ export function SchedulerPage() {
     clearDragState();
   }
 
+  function selectAdjacentSection(direction: -1 | 1) {
+    if (visibleSections.length === 0) return;
+
+    const currentIndex = Math.max(
+      0,
+      visibleSections.findIndex((section) => section.sectionId === selectedSection?.sectionId),
+    );
+    const nextIndex = (currentIndex + direction + visibleSections.length) % visibleSections.length;
+    setSelectedSectionId(visibleSections[nextIndex].sectionId);
+  }
+
+  function renderSectionNavigator() {
+    if (visibleSections.length === 0) return null;
+
+    const selectedIndex = Math.max(
+      0,
+      visibleSections.findIndex((section) => section.sectionId === selectedSection?.sectionId),
+    );
+
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+        <label className="min-w-0 flex-1 text-xs font-semibold uppercase text-slate-500">
+          Section
+          <select
+            className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-900"
+            onChange={(event) => setSelectedSectionId(event.target.value)}
+            value={selectedSection?.sectionId ?? ""}
+          >
+            {visibleSections.map((section) => (
+              <option key={section.sectionId} value={section.sectionId}>
+                {section.sectionName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex items-center justify-between gap-2 sm:justify-end">
+          <p className="text-xs font-semibold text-slate-600">
+            {selectedIndex + 1} of {visibleSections.length}
+          </p>
+          <div className="flex overflow-hidden rounded-md border border-slate-300">
+            <button
+              aria-label="Previous section"
+              className="inline-flex h-9 w-9 items-center justify-center bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+              disabled={visibleSections.length < 2}
+              onClick={() => selectAdjacentSection(-1)}
+              title="Previous section"
+              type="button"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              aria-label="Next section"
+              className="inline-flex h-9 w-9 items-center justify-center border-l border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+              disabled={visibleSections.length < 2}
+              onClick={() => selectAdjacentSection(1)}
+              title="Next section"
+              type="button"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function selectAdjacentTeacher(direction: -1 | 1) {
+    if (visibleTeachers.length === 0) return;
+
+    const currentIndex = Math.max(
+      0,
+      visibleTeachers.findIndex((teacher) => teacher.teacherId === selectedTeacher?.teacherId),
+    );
+    const nextIndex = (currentIndex + direction + visibleTeachers.length) % visibleTeachers.length;
+    setSelectedTeacherId(visibleTeachers[nextIndex].teacherId);
+  }
+
+  function renderTeacherNavigator() {
+    if (visibleTeachers.length === 0) return null;
+
+    const selectedIndex = Math.max(
+      0,
+      visibleTeachers.findIndex((teacher) => teacher.teacherId === selectedTeacher?.teacherId),
+    );
+
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+        <label className="min-w-0 flex-1 text-xs font-semibold uppercase text-slate-500">
+          Teacher
+          <select
+            className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-900"
+            onChange={(event) => setSelectedTeacherId(event.target.value)}
+            value={selectedTeacher?.teacherId ?? ""}
+          >
+            {visibleTeachers.map((teacher) => (
+              <option key={teacher.teacherId} value={teacher.teacherId}>
+                {teacher.fullName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex items-center justify-between gap-2 sm:justify-end">
+          <p className="text-xs font-semibold text-slate-600">
+            {selectedIndex + 1} of {visibleTeachers.length}
+          </p>
+          <div className="flex overflow-hidden rounded-md border border-slate-300">
+            <button
+              aria-label="Previous teacher"
+              className="inline-flex h-9 w-9 items-center justify-center bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+              disabled={visibleTeachers.length < 2}
+              onClick={() => selectAdjacentTeacher(-1)}
+              title="Previous teacher"
+              type="button"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              aria-label="Next teacher"
+              className="inline-flex h-9 w-9 items-center justify-center border-l border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+              disabled={visibleTeachers.length < 2}
+              onClick={() => selectAdjacentTeacher(1)}
+              title="Next teacher"
+              type="button"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function openPrintableSchedule() {
-    const title = viewMode === "section" ? "Section Schedule" : "Teacher Schedule";
+    const title = viewMode === "section" ? "Class Schedule" : "Teacher Schedule";
     const entities = viewMode === "section" ? visibleSections : visibleTeachers;
     const field = viewMode === "section" ? "sectionId" : "teacherId";
+    const signatories =
+      viewMode === "section"
+        ? schedulePrintSettings.classSchedule
+        : schedulePrintSettings.teacherSchedule;
+    const signatureItems = [
+      { label: "Prepared by:", signatory: signatories.preparedBy },
+      { label: "Checked by:", signatory: signatories.checkedBy },
+      { label: "Noted by:", signatory: signatories.notedBy },
+    ];
+    const signatureRows = signatureItems
+      .map(
+        (item) =>
+          `<div>
+            <span>${escapeHtml(item.label)}</span>
+            <strong class="${item.signatory.name.trim() ? "" : "is-empty"}">${escapeHtml(item.signatory.name)}</strong>
+            <small>${escapeHtml(item.signatory.position)}</small>
+          </div>`,
+      )
+      .join("");
     const pages = entities.map((entity) => {
       const entityId = viewMode === "section" ? (entity as Section).sectionId : (entity as Teacher).teacherId;
       const entityName = viewMode === "section" ? (entity as Section).sectionName : (entity as Teacher).fullName;
+      const teacherTotalTeachingLoad =
+        viewMode === "teacher"
+          ? assignments
+              .filter((assignment) => assignment.teacherId === entityId)
+              .reduce((sum, assignment) => sum + Number(assignment.units || 0), 0)
+          : 0;
+      const teacherTotalAncillaryLoad =
+        viewMode === "teacher"
+          ? ancillaryLoads
+              .filter(
+                (load) =>
+                  load.teacherId === entityId &&
+                  load.schoolYear === schoolYear,
+              )
+              .reduce((sum, load) => sum + Number(load.units || 0), 0)
+          : 0;
       const entitySlots =
         viewMode === "section"
           ? getSlotsForSection(entity as Section, (entity as Section).gradeLevel)
           : allDisplaySlots;
-      const rows = entitySlots
-        .map((slot) => {
+      const entityBreaks = viewMode === "section" ? getBreaks((entity as Section).gradeLevel) : [];
+      const entityMeta =
+        viewMode === "section"
+          ? [
+              { label: "Section", value: (entity as Section).sectionName },
+              { label: "Grade Level", value: `Grade ${(entity as Section).gradeLevel}` },
+              { label: "Strand", value: (entity as Section).strand },
+              { label: "Room", value: (entity as Section).room || "TBA" },
+              { label: "Template", value: getTemplateLabel(entity as Section, (entity as Section).gradeLevel) },
+            ]
+          : [
+              { label: "Teacher", value: (entity as Teacher).fullName },
+              { label: "Position", value: (entity as Teacher).position },
+              { label: "Specialization", value: (entity as Teacher).specialization },
+              { label: "Total Teaching Load", value: `${teacherTotalTeachingLoad} units` },
+              { label: "Total Ancillary Loads", value: `${teacherTotalAncillaryLoad} units` },
+            ];
+      const timetableRows = [
+        ...entitySlots.map((slot) => ({ type: "slot" as const, startTime: slot.startTime, endTime: slot.endTime, slot })),
+        ...entityBreaks.map((breakRow) => ({ type: "break" as const, ...breakRow })),
+      ].sort(
+        (first, second) =>
+          timeToMinutes(first.startTime) - timeToMinutes(second.startTime) ||
+          timeToMinutes(first.endTime) - timeToMinutes(second.endTime),
+      );
+      const rows = timetableRows
+        .flatMap((row) => {
+          if (row.type === "break") {
+            return [
+              `<tr class="break-row"><th>${escapeHtml(`${row.startTime}-${row.endTime}`)}</th><td colspan="${days.length}">${escapeHtml(row.label)}</td></tr>`,
+            ];
+          }
+
+          const rowEntries = days.map((day) => entryFor(field, entityId, day, row.slot));
+          if (rowEntries.every((entry) => !entry)) return [];
+
           const cells = days
-            .map((day) => {
-              const entry = entryFor(field, entityId, day, slot);
+            .map((day, index) => {
+              const entry = rowEntries[index];
               const subject = entry ? subjectsById.get(entry.subjectId) : undefined;
               const section = entry ? sectionsById.get(entry.sectionId) : undefined;
               const teacher = entry ? teachersById.get(entry.teacherId) : undefined;
-              return `<td>${entry ? `<strong>${escapeHtml(subject?.subjectName ?? entry.subjectId)}</strong><br />${escapeHtml(viewMode === "section" ? teacher?.fullName : section?.sectionName)}<br />${escapeHtml(entry.room ? `Room ${entry.room}` : "")}` : ""}</td>`;
+              const secondary = viewMode === "section" ? teacher?.fullName : section?.sectionName;
+              const details = [
+                secondary,
+                entry?.room ? `Room ${entry.room}` : "",
+                entry ? `${entry.duration} hr${entry.duration === 1 ? "" : "s"}` : "",
+              ].filter(Boolean);
+              return `<td>${entry ? `<strong>${escapeHtml(subject?.subjectName ?? entry.subjectId)}</strong>${details.map((detail) => `<span>${escapeHtml(detail)}</span>`).join("")}` : ""}</td>`;
             })
             .join("");
-          return `<tr><th>${escapeHtml(slot.label)}</th>${cells}</tr>`;
+          return [`<tr><th>${escapeHtml(row.slot.label)}</th>${cells}</tr>`];
         })
         .join("");
+      const metaRows = entityMeta
+        .map((item) => `<div><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong></div>`)
+        .join("");
 
-      return `<section class="page"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(entityName)} - ${escapeHtml(schoolYear)} - ${escapeHtml(term)}</p><table><thead><tr><th>Time</th>${days.map((day) => `<th>${day}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></section>`;
+      return `<section class="page">
+        <header class="letterhead">
+          <div class="agency">
+            <img class="print-logo header-logo" src="${depedLogoUrl}" alt="DepEd logo" />
+            <p class="script">Republic of the Philippines</p>
+            <p class="deped">Department of Education</p>
+            <p>REGION IV-A CALABARZON</p>
+            <p>SCHOOLS DIVISION OF BATANGAS</p>
+            <p>MATAASNAKAHOY SENIOR HIGH SCHOOL</p>
+            <p>BAYORBOR, MATAASNAKAHOY, BATANGAS</p>
+          </div>
+        </header>
+        <div class="document-title">
+          <p>School Year ${escapeHtml(schoolYear)} | ${escapeHtml(term)}</p>
+          <h1>${escapeHtml(title.toUpperCase())}</h1>
+          <strong>${escapeHtml(entityName)}</strong>
+        </div>
+        <div class="meta-grid">${metaRows}</div>
+        <table class="schedule-table">
+          <thead><tr><th>Time</th>${days.map((day) => `<th>${day}</th>`).join("")}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="signature-grid">${signatureRows}</div>
+        <footer>
+          <div class="footer-brand">
+            <img class="print-logo" src="${bagongPilipinasLogoUrl}" alt="Bagong Pilipinas logo" />
+            <img class="print-logo" src="${mshsLogoUrl}" alt="Mataasnakahoy Senior High School logo" />
+          </div>
+          <div class="footer-details">
+            <div><strong>Address</strong><span>:</span> Brgy. Bayorbor, Mataasnakahoy, Batangas</div>
+            <div><strong>Phone No.</strong><span>:</span> (043)741-8878</div>
+            <div><strong>Email</strong><span>:</span> mkahoyshs2016@gmail.com</div>
+          </div>
+        </footer>
+      </section>`;
     }).join("");
 
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
-    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>@page{size:A4 landscape;margin:12mm}body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;font-size:11px}.page{page-break-after:always}.page:last-child{page-break-after:auto}table{border-collapse:collapse;width:100%;margin-top:10px}th,td{border:1px solid #cbd5e1;padding:6px;vertical-align:top}th{background:#e2e8f0;text-align:left}.no-print{margin:12px;padding:8px 12px}@media print{.no-print{display:none}}</style></head><body><button class="no-print" onclick="window.print()">Print / Save as PDF</button>${pages}<script>window.addEventListener("load",()=>setTimeout(()=>window.print(),250));</script></body></html>`);
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title><style>
+      @page{size:A4 landscape;margin:10mm}
+      *{box-sizing:border-box}
+      body{margin:0;background:#e5e7eb;color:#111827;font-family:Arial,Helvetica,sans-serif;font-size:10px}
+      .no-print{position:fixed;right:16px;top:16px;z-index:10;border:1px solid #1d4ed8;background:#1d4ed8;color:white;border-radius:6px;padding:9px 14px;font-weight:700}
+      .page{display:flex;flex-direction:column;height:190mm;background:white;margin:0 auto 14px;padding:6mm 8mm 8mm;page-break-after:always}
+      .page:last-child{page-break-after:auto}
+      .letterhead{border-bottom:1.5px solid #111827;padding-bottom:4px}
+      .print-logo{width:42px;height:42px;object-fit:contain}
+      .header-logo{display:block;margin:0 auto 1px}
+      .agency{text-align:center;line-height:1.06}
+      .agency p{margin:0}
+      .agency .script{font-family:"Old English Text MT","Times New Roman",serif;font-size:11px;font-weight:700;text-transform:none}
+      .agency .deped{font-family:"Old English Text MT","Times New Roman",serif;font-size:17px;font-weight:700;text-transform:none}
+      .agency p:not(.script):not(.deped){font-family:"Times New Roman",serif;font-size:9px;font-weight:700;letter-spacing:.02em}
+      .document-title{text-align:center;margin:6px 0 5px;line-height:1.15}
+      .document-title p{margin:0;color:#374151;font-size:8px;font-weight:700;text-transform:uppercase}
+      h1{margin:2px 0 1px;font-size:14px;letter-spacing:.06em}
+      .document-title strong{font-size:10px;text-transform:uppercase}
+      .meta-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid #111827;border-bottom:0;margin-bottom:0}
+      .meta-grid div{min-height:30px;border-right:1px solid #111827;padding:4px 6px}
+      .meta-grid div:last-child{border-right:0}
+      .meta-grid span{display:block;color:#374151;font-size:8px;font-weight:700;text-transform:uppercase}
+      .meta-grid strong{display:block;margin-top:2px;font-size:10px}
+      table{border-collapse:collapse;width:100%}
+      .schedule-table th,.schedule-table td{border:1px solid #111827;padding:4px 5px;vertical-align:top}
+      .schedule-table thead th{background:#dbeafe;text-align:center;font-size:10px;text-transform:uppercase}
+      .schedule-table tbody th{width:86px;background:#f3f4f6;text-align:center;font-size:9px}
+      .schedule-table td{height:42px;width:18%;font-size:9px;line-height:1.25}
+      .schedule-table td strong{display:block;font-size:9px;text-transform:uppercase}
+      .schedule-table td span{display:block;margin-top:2px;color:#374151}
+      .break-row th,.break-row td{height:auto;background:#fef3c7!important;text-align:center;font-weight:700;text-transform:uppercase}
+      .signature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:12px;text-align:center}
+      .signature-grid span{display:block;margin-bottom:6px;text-align:left;font-size:9px;font-weight:700}
+      .signature-grid strong{display:inline-block;min-height:13px;font-size:10px;text-decoration:underline;text-underline-offset:2px;text-transform:uppercase}
+      .signature-grid strong.is-empty{text-decoration:none}
+      .signature-grid small{display:block;margin-top:2px;color:#374151;font-size:8px}
+      footer{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:10px;border-top:1.5px solid #111827;margin-top:auto;padding-top:4px;color:#374151;font-size:7px}
+      .footer-brand{display:flex;align-items:center;gap:6px}
+      .footer-details{line-height:1.25}
+      .footer-details strong{display:inline-block;width:42px;color:#111827}
+      .footer-details span{display:inline-block;width:8px;text-align:center}
+      .empty-state{padding:35mm 10mm;text-align:center}
+      .empty-state h1{font-size:18px}
+      @media print{body{background:white}.no-print{display:none}.page{height:190mm;margin:0;padding:0 0 4mm}.schedule-table{break-inside:auto}.schedule-table tr{break-inside:avoid}}
+    </style></head><body><button class="no-print" onclick="window.print()">Print / Save as PDF</button>${pages || `<section class="page empty-state"><h1>${escapeHtml(title)}</h1><p>No schedule entries found for the selected filters.</p></section>`}<script>window.addEventListener("load",()=>setTimeout(()=>window.print(),250));</script></body></html>`);
     printWindow.document.close();
   }
 
@@ -2617,8 +3424,8 @@ export function SchedulerPage() {
 
     return (
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm" key={entityId}>
-        <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-          <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold text-slate-950">
+        <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+          <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-950">
             {entityTitle}
             {entityField === "sectionId" && (
               <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
@@ -2626,7 +3433,7 @@ export function SchedulerPage() {
               </span>
             )}
           </h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="text-xs text-slate-500">
             {entityField === "sectionId"
               ? `Grade ${(entity as Section).gradeLevel} - ${(entity as Section).strand}${(entity as Section).room ? ` - Room ${(entity as Section).room}` : ""}`
               : (entity as Teacher).specialization}
@@ -2636,9 +3443,9 @@ export function SchedulerPage() {
           <table className="w-full min-w-[860px] table-fixed text-left text-xs">
             <thead className="bg-slate-900 text-white">
               <tr>
-                <th className="w-28 px-3 py-3 font-semibold">Time</th>
+                <th className="w-24 px-2 py-2 font-semibold">Time</th>
                 {days.map((day) => (
-                  <th className="px-3 py-3 font-semibold" key={day}>{day}</th>
+                  <th className="px-2 py-2 font-semibold" key={day}>{day}</th>
                 ))}
               </tr>
             </thead>
@@ -2646,7 +3453,7 @@ export function SchedulerPage() {
               {entitySlots.flatMap((slot) => {
                 const slotRow = (
                   <tr key={slot.slotId}>
-                    <td className="px-3 py-3 align-top font-semibold text-slate-950">{slot.label}</td>
+                    <td className="px-2 py-2 align-top font-semibold text-slate-950">{slot.label}</td>
                     {days.map((day) => {
                       const cellEntries = entriesForCell(entityField, entityId, day, slot);
                       const exactEntry = cellEntries.find((entry) => entry.slotId === slot.slotId);
@@ -2655,7 +3462,7 @@ export function SchedulerPage() {
                       return (
                         <td
                           className={[
-                            "h-24 px-3 py-3 align-top",
+                            "h-16 px-2 py-2 align-top",
                             canEdit && !isGenerating ? "transition-colors hover:bg-blue-50/50" : "",
                           ].join(" ")}
                           key={`${slot.slotId}-${day}`}
@@ -2676,7 +3483,7 @@ export function SchedulerPage() {
                                 return (
                                   <div
                                     className={[
-                                      "rounded-md border p-2 transition-all",
+                                      "rounded-md border p-1.5 transition-all",
                                       overlapWarnings.length > 0
                                         ? "border-red-300 bg-red-50"
                                         : entry.locked
@@ -2721,12 +3528,12 @@ export function SchedulerPage() {
                                         </div>
                                       )}
                                     </div>
-                                    <p className="mt-1 text-slate-600">
+                                    <p className="text-slate-600">
                                       {entityField === "sectionId" ? teacher?.fullName : section?.sectionName}
                                     </p>
-                                    <p className="mt-1 text-slate-500">{entry.startTime}-{entry.endTime}</p>
-                                    {entry.room && <p className="mt-1 text-slate-500">Room {entry.room}</p>}
-                                    {entry.locked && <p className="mt-1 text-[11px] font-semibold uppercase text-amber-700">Locked</p>}
+                                    <p className="text-slate-500">{entry.startTime}-{entry.endTime}</p>
+                                    {entry.room && <p className="text-slate-500">Room {entry.room}</p>}
+                                    {entry.locked && <p className="text-[11px] font-semibold uppercase text-amber-700">Locked</p>}
                                     {overlapWarnings.map((warning) => (
                                       <p className="mt-1 text-[11px] font-semibold text-red-700" key={warning}>{warning}</p>
                                     ))}
@@ -2745,8 +3552,8 @@ export function SchedulerPage() {
                 return [
                   slotRow,
                   <tr className="bg-slate-50 text-center text-slate-500" key={`${slot.slotId}-break`}>
-                    <td className="px-3 py-2 font-semibold">{breakAfter.startTime}-{breakAfter.endTime}</td>
-                    <td className="px-3 py-2 font-medium" colSpan={5}>{breakAfter.label}</td>
+                    <td className="px-2 py-1.5 font-semibold">{breakAfter.startTime}-{breakAfter.endTime}</td>
+                    <td className="px-2 py-1.5 font-medium" colSpan={5}>{breakAfter.label}</td>
                   </tr>,
                 ];
               })}
@@ -2846,51 +3653,61 @@ export function SchedulerPage() {
         title="Scheduler"
       />
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-4">
+      <div className="mb-3 grid gap-2 sm:grid-cols-4">
         <SummaryCard detail={gradeLevel === "all" ? "All grades selected" : `Grade ${gradeLevel} selected`} label="Sections" value={visibleSections.length} />
         <SummaryCard detail={draftEntries.length > 0 ? "draft generated" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
         <SummaryCard detail="needs review" label="Conflicts" value={actionableConflicts.length} />
         <SummaryCard detail={optimizationScore === null ? "generate to calculate" : `score ${optimizationScore.toLocaleString()}`} label="Done" value={completionPercent === null ? "-" : `${completionPercent}%`} />
       </div>
 
-      <div className="mb-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
           <label className="text-xs font-semibold uppercase text-slate-500">
             School Year
-            <input className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-normal normal-case text-slate-900" onChange={(event) => setSchoolYear(event.target.value)} value={schoolYear} />
+            <input className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900" onChange={(event) => setSchoolYear(event.target.value)} value={schoolYear} />
           </label>
           <label className="text-xs font-semibold uppercase text-slate-500">
             Term
-            <select className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-normal normal-case text-slate-900" onChange={(event) => setTerm(event.target.value as AcademicTerm)} value={term}>
+            <select className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900" onChange={(event) => setTerm(event.target.value as AcademicTerm)} value={term}>
               {termOptions.map((termOption) => <option key={termOption} value={termOption}>{termOption}</option>)}
             </select>
           </label>
           <label className="text-xs font-semibold uppercase text-slate-500">
             Grade Level
-            <select className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-normal normal-case text-slate-900" onChange={(event) => setGradeLevel(event.target.value)} value={gradeLevel}>
+            <select className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900" onChange={(event) => setGradeLevel(event.target.value)} value={gradeLevel}>
               {gradeOptions.map((option) => <option key={option} value={option}>{option === "all" ? "All Grades" : `Grade ${option}`}</option>)}
             </select>
           </label>
           <label className="text-xs font-semibold uppercase text-slate-500">
             Strand
-            <select className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-normal normal-case text-slate-900" onChange={(event) => setStrandFilter(event.target.value)} value={strandFilter}>
+            <select className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900" onChange={(event) => setStrandFilter(event.target.value)} value={strandFilter}>
               <option value="all">All strands</option>
               {strandOptions.map((strand) => <option key={strand} value={strand}>{strand}</option>)}
             </select>
           </label>
           <label className="text-xs font-semibold uppercase text-slate-500">
             View
-            <div className="mt-1 grid h-10 grid-cols-2 overflow-hidden rounded-md border border-slate-300">
+            <div className="mt-1 grid h-9 grid-cols-2 overflow-hidden rounded-md border border-slate-300">
               <button className={viewMode === "section" ? "bg-blue-600 text-white" : "bg-white text-slate-700"} onClick={() => setViewMode("section")} type="button">By Section</button>
               <button className={viewMode === "teacher" ? "bg-blue-600 text-white" : "bg-white text-slate-700"} onClick={() => setViewMode("teacher")} type="button">By Teacher</button>
             </div>
           </label>
         </div>
-        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)_auto]">
+        <label className="mt-2 inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+          <input
+            checked={ignoreSameSubjectTeacherDayOnDrag}
+            className="h-4 w-4 rounded border-slate-300"
+            disabled={isGenerating}
+            onChange={(event) => setIgnoreSameSubjectTeacherDayOnDrag(event.target.checked)}
+            type="checkbox"
+          />
+          Ignore same subject, teacher, and day rule while dragging
+        </label>
+        <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)_auto_auto]">
           <label className="text-xs font-semibold uppercase text-slate-500">
             Schedule Name
             <input
-              className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-normal normal-case text-slate-900"
+              className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
               disabled={!canEdit || isGenerating || isSaving}
               onChange={(event) => setScheduleName(event.target.value)}
               placeholder="e.g. First draft"
@@ -2898,7 +3715,7 @@ export function SchedulerPage() {
             />
           </label>
           <button
-            className="mt-5 inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="mt-5 inline-flex h-9 items-center justify-center rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             disabled={!canEdit || isGenerating || isSaving || visibleEntries.length === 0}
             onClick={() => void handleSaveNamedSchedule()}
             type="button"
@@ -2908,7 +3725,7 @@ export function SchedulerPage() {
           <label className="text-xs font-semibold uppercase text-slate-500">
             Saved Schedules
             <select
-              className="mt-1 h-10 w-full rounded-md border border-slate-300 px-3 text-sm font-normal normal-case text-slate-900"
+              className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
               disabled={savedSchedules.length === 0 || isGenerating || isSaving}
               onChange={(event) => setSelectedSavedScheduleId(event.target.value)}
               value={selectedSavedScheduleId}
@@ -2922,12 +3739,20 @@ export function SchedulerPage() {
             </select>
           </label>
           <button
-            className="mt-5 inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+            className="mt-5 inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
             disabled={!canEdit || isGenerating || isSaving || !selectedSavedSchedule}
             onClick={() => void handleLoadNamedSchedule()}
             type="button"
           >
             Load Selected
+          </button>
+          <button
+            className="mt-5 inline-flex h-9 items-center justify-center rounded-md border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+            disabled={!canEdit || isGenerating || isSaving || !selectedSavedSchedule}
+            onClick={() => void handleDeleteNamedSchedule()}
+            type="button"
+          >
+            Delete Selected
           </button>
         </div>
         {(generationMessage || saveMessage || lockMessage) && (
@@ -3034,8 +3859,8 @@ export function SchedulerPage() {
         )}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="max-h-[72vh] space-y-5 overflow-y-auto pr-2">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-3">
           {isGenerating && draftEntries.length > 0 && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800 shadow-sm">
               Live draft is updating as the scheduler finds better placements.
@@ -3046,23 +3871,37 @@ export function SchedulerPage() {
               Generate a schedule for {gradeLevel === "all" ? "all grades" : `Grade ${gradeLevel}`} to populate the timetable.
             </div>
           ) : viewMode === "section" ? (
-            visibleSections.map((section) => renderScheduleTable(section, "sectionId"))
+            <>
+              {renderSectionNavigator()}
+              {selectedSection ? renderScheduleTable(selectedSection, "sectionId") : (
+                <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+                  No sections match the selected filters.
+                </div>
+              )}
+            </>
           ) : (
-            visibleTeachers.map((teacher) => renderScheduleTable(teacher, "teacherId"))
+            <>
+              {renderTeacherNavigator()}
+              {selectedTeacher ? renderScheduleTable(selectedTeacher, "teacherId") : (
+                <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+                  No teachers match the selected filters.
+                </div>
+              )}
+            </>
           )}
         </div>
 
-        <aside className="max-h-[72vh] space-y-5 overflow-y-auto pr-2">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-slate-950">Teacher Auto Plot</h2>
+        <aside className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-950">Teacher Auto Plot</h2>
               <StatusBadge label={selectedTeacher ? "Ready" : "No teacher"} tone={selectedTeacher ? "blue" : "amber"} />
             </div>
-            <div className="space-y-3">
+            <div className="space-y-2">
               <label className="text-xs font-semibold uppercase text-slate-500">
                 Teacher
                 <select
-                  className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-normal normal-case text-slate-900"
+                  className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-900"
                   onChange={(event) => setSelectedTeacherId(event.target.value)}
                   value={selectedTeacher?.teacherId ?? ""}
                 >
@@ -3073,54 +3912,65 @@ export function SchedulerPage() {
                   ))}
                 </select>
               </label>
-              <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
-                {teacherPlotSummaries.map((summary) => (
-                  <button
-                    className={[
-                      "w-full rounded-md border p-2 text-left text-xs transition-colors",
-                      selectedTeacher?.teacherId === summary.teacher.teacherId
-                        ? "border-blue-300 bg-blue-50"
-                        : summary.conflictCount > 0
-                          ? "border-red-200 bg-red-50"
-                          : "border-slate-200 bg-slate-50 hover:bg-blue-50",
-                    ].join(" ")}
-                    key={summary.teacher.teacherId}
-                    onClick={() => setSelectedTeacherId(summary.teacher.teacherId)}
-                    type="button"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="font-semibold text-slate-950">{summary.teacher.fullName}</p>
-                      <StatusBadge label={summary.conflictCount > 0 ? "Conflict" : "OK"} tone={summary.conflictCount > 0 ? "red" : "green"} />
-                    </div>
-                    <p className="mt-1 text-slate-600">
-                      {summary.unplottedCount} unplotted / {summary.plottedCount} plotted / {summary.assignmentCount} loads
-                    </p>
-                  </button>
-                ))}
-              </div>
               {selectedTeacher && (
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <p className="mb-2 text-xs font-semibold uppercase text-slate-500">Selected Loads</p>
-                  <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-semibold text-slate-950">{selectedTeacher.fullName}</p>
+                    <StatusBadge
+                      label={(teacherPlotSummaries.find((summary) => summary.teacher.teacherId === selectedTeacher.teacherId)?.conflictCount ?? 0) > 0 ? "Conflict" : "OK"}
+                      tone={(teacherPlotSummaries.find((summary) => summary.teacher.teacherId === selectedTeacher.teacherId)?.conflictCount ?? 0) > 0 ? "red" : "green"}
+                    />
+                  </div>
+                  <p className="mt-1 text-slate-600">
+                    {teacherPlotSummaries.find((summary) => summary.teacher.teacherId === selectedTeacher.teacherId)?.unplottedCount ?? 0} unplotted /{" "}
+                    {teacherPlotSummaries.find((summary) => summary.teacher.teacherId === selectedTeacher.teacherId)?.plottedCount ?? 0} plotted /{" "}
+                    {teacherPlotSummaries.find((summary) => summary.teacher.teacherId === selectedTeacher.teacherId)?.assignmentCount ?? 0} loads
+                  </p>
+                </div>
+              )}
+              {selectedTeacher && (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                  <p className="mb-1 text-xs font-semibold uppercase text-slate-500">Selected Loads</p>
+                  <div className="space-y-1">
                     {selectedTeacherAssignments.map((assignment) => {
                       const rule = sessionsForAssignment(assignment);
                       const plottedCount = visibleEntries.filter((entry) => entry.sourceAssignmentId === assignment.assignmentId).length;
+                      const canDragLoad = canEdit && !isGenerating && plottedCount < rule.sessions;
                       const warnings = selectedTeacherEntries
                         .filter((entry) => entry.sourceAssignmentId === assignment.assignmentId)
                         .flatMap((entry) => getOverlapWarnings(entry, visibleEntries, "teacherId"));
 
                       return (
-                        <div className="rounded-md border border-white bg-white p-2 text-xs" key={assignment.assignmentId}>
+                        <div
+                          className={[
+                            "rounded-md border border-white bg-white p-1.5 text-xs transition-all",
+                            canDragLoad ? "cursor-grab hover:border-blue-200 hover:bg-blue-50 active:cursor-grabbing" : "",
+                            draggedConflictAssignmentId === assignment.assignmentId ? "opacity-50" : "",
+                          ].join(" ")}
+                          draggable={canDragLoad}
+                          key={assignment.assignmentId}
+                          onDragEnd={clearDragState}
+                          onDragStart={(event) => {
+                            if (!canDragLoad) return;
+                            setDraggedConflictAssignmentId(assignment.assignmentId);
+                            setDraggedScheduleId(null);
+                            event.dataTransfer.effectAllowed = "move";
+                          }}
+                          title={canDragLoad ? "Drag to a compatible schedule slot" : undefined}
+                        >
                           <div className="flex items-start justify-between gap-2">
                             <p className="font-semibold text-slate-950">{assignment.subject.subjectName}</p>
-                            <StatusBadge
-                              label={plottedCount >= rule.sessions ? "Plotted" : "Unplotted"}
-                              tone={plottedCount >= rule.sessions ? "green" : "amber"}
-                            />
+                            <div className="flex shrink-0 items-center gap-1">
+                              <StatusBadge
+                                label={plottedCount >= rule.sessions ? "Plotted" : "Unplotted"}
+                                tone={plottedCount >= rule.sessions ? "green" : "amber"}
+                              />
+                              {canDragLoad && <GripVertical aria-hidden="true" className="text-slate-500" size={14} />}
+                            </div>
                           </div>
-                          <p className="mt-1 text-slate-600">{assignment.section.sectionName} - {plottedCount}/{rule.sessions} sessions</p>
+                          <p className="text-slate-600">{assignment.section.sectionName} - {plottedCount}/{rule.sessions} sessions</p>
                           {warnings.map((warning) => (
-                            <p className="mt-1 font-semibold text-red-700" key={warning}>{warning}</p>
+                            <p className="font-semibold text-red-700" key={warning}>{warning}</p>
                           ))}
                         </div>
                       );
@@ -3132,7 +3982,7 @@ export function SchedulerPage() {
                 <label className="text-xs font-semibold uppercase text-slate-500">
                   Auto Plot Mode
                   <select
-                    className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-normal normal-case text-slate-900"
+                    className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-900"
                     onChange={(event) => setAutoPlotMode(event.target.value as AutoPlotMode)}
                     value={autoPlotMode}
                   >
@@ -3143,7 +3993,7 @@ export function SchedulerPage() {
                 <label className="text-xs font-semibold uppercase text-slate-500">
                   Scope
                   <select
-                    className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-normal normal-case text-slate-900"
+                    className="mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm font-normal normal-case text-slate-900"
                     onChange={(event) => setAutoPlotScope(event.target.value as AutoPlotScope)}
                     value={autoPlotScope}
                   >
@@ -3161,7 +4011,7 @@ export function SchedulerPage() {
                   Preserve existing schedule
                 </label>
                 <button
-                  className="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="inline-flex h-9 items-center justify-center rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                   disabled={!canEdit || isGenerating || !selectedTeacher}
                   onClick={handleAutoPlotTeachers}
                   type="button"

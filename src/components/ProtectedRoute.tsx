@@ -1,13 +1,15 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../providers/AuthProvider";
-import type { UserRole } from "../types";
+import type { AppModule, UserRole } from "../types";
+import { canAccessModule } from "../utils/accessControl";
 
 type ProtectedRouteProps = {
   allowedRoles?: UserRole[];
+  requiredModule?: AppModule;
   viewOnly?: boolean;
 };
 
-export function ProtectedRoute({ allowedRoles, viewOnly }: ProtectedRouteProps) {
+export function ProtectedRoute({ allowedRoles, requiredModule, viewOnly }: ProtectedRouteProps) {
   const { user, profile, loading } = useAuth();
   const location = useLocation();
 
@@ -32,10 +34,14 @@ export function ProtectedRoute({ allowedRoles, viewOnly }: ProtectedRouteProps) 
   }
 
   if (allowedRoles && !allowedRoles.includes(profile.role)) {
-    return <Navigate to={profile.role === "viewer" ? "/reports" : "/dashboard"} replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
-  if (viewOnly && profile.role !== "viewer") {
+  if (requiredModule && !canAccessModule(profile, requiredModule)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  if (viewOnly && profile.role !== "teacher") {
     return <Navigate to="/dashboard" replace />;
   }
 

@@ -11,7 +11,14 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../providers/AuthProvider";
-import type { UserProfile, UserRole, UserStatus } from "../types";
+import type { AppModule, UserProfile, UserRole, UserStatus } from "../types";
+import {
+  appModules,
+  getDefaultModulePermissions,
+  getRoleLabel,
+  getUserModulePermissions,
+  roleOptions,
+} from "../utils/accessControl";
 
 type UserRow = UserProfile & {
   id: string;
@@ -64,6 +71,7 @@ export function UsersPage() {
     user: UserRow,
     nextStatus: UserStatus,
     nextRole = user.role,
+    nextModulePermissions = getUserModulePermissions(user),
   ) {
     if (!isSuperAdmin) {
       return;
@@ -76,6 +84,7 @@ export function UsersPage() {
       await updateDoc(doc(db, "users", user.id), {
         role: nextRole,
         status: nextStatus,
+        modulePermissions: nextRole === "super_admin" ? getDefaultModulePermissions("super_admin") : nextModulePermissions,
         reviewedAt: serverTimestamp(),
         reviewedBy: profile?.userId,
       });
@@ -87,7 +96,18 @@ export function UsersPage() {
   }
 
   async function updateRole(user: UserRow, nextRole: UserRole) {
-    await updateUserAccess(user, user.status, nextRole);
+    await updateUserAccess(user, user.status, nextRole, getDefaultModulePermissions(nextRole));
+  }
+
+  async function toggleModule(user: UserRow, moduleId: AppModule) {
+    if (!isSuperAdmin || user.role === "super_admin" || moduleId === "dashboard") return;
+
+    const currentPermissions = getUserModulePermissions(user);
+    const nextPermissions = currentPermissions.includes(moduleId)
+      ? currentPermissions.filter((permission) => permission !== moduleId)
+      : [...currentPermissions, moduleId];
+
+    await updateUserAccess(user, user.status, user.role, nextPermissions);
   }
 
   return (
@@ -120,11 +140,12 @@ export function UsersPage() {
           <div className="p-5 text-sm text-slate-600">No registered users yet.</div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
+            <table className="w-full min-w-[1100px] text-left text-sm">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="px-4 py-3 font-semibold">User</th>
                   <th className="px-4 py-3 font-semibold">Role</th>
+                  <th className="px-4 py-3 font-semibold">Visible Modules</th>
                   <th className="px-4 py-3 font-semibold">Status</th>
                   <th className="px-4 py-3 font-semibold">UID</th>
                   <th className="px-4 py-3 text-right font-semibold">Actions</th>
@@ -148,10 +169,48 @@ export function UsersPage() {
                           onChange={(event) => updateRole(user, event.target.value as UserRole)}
                           value={user.role}
                         >
-                          <option value="super_admin">Super Admin</option>
-                          <option value="admin">Admin</option>
-                          <option value="viewer">Viewer</option>
+                          {roleOptions.map((role) => (
+                            <option key={role.value} value={role.value}>
+                              {role.label}
+                            </option>
+                          ))}
                         </select>
+                      </td>
+                      <td className="px-4 py-3">
+                        {user.role === "super_admin" ? (
+                          <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-200">
+                            All modules
+                          </span>
+                        ) : (
+                          <div className="grid max-w-xl gap-1 sm:grid-cols-2 xl:grid-cols-3">
+                            {appModules
+                              .filter((module) => module.id !== "users")
+                              .map((module) => {
+                                const checked = getUserModulePermissions(user).includes(module.id);
+
+                                return (
+                                  <label
+                                    className={[
+                                      "inline-flex items-center gap-2 rounded-md border px-2 py-1 text-xs",
+                                      checked
+                                        ? "border-blue-200 bg-blue-50 text-blue-800"
+                                        : "border-slate-200 bg-slate-50 text-slate-500",
+                                    ].join(" ")}
+                                    key={module.id}
+                                  >
+                                    <input
+                                      checked={checked}
+                                      className="h-3.5 w-3.5 rounded border-slate-300"
+                                      disabled={!isSuperAdmin || isSaving || isSelf || module.id === "dashboard"}
+                                      onChange={() => void toggleModule(user, module.id)}
+                                      type="checkbox"
+                                    />
+                                    <span>{module.label}</span>
+                                  </label>
+                                );
+                              })}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -162,6 +221,7 @@ export function UsersPage() {
                         >
                           {user.status}
                         </span>
+                        <p className="mt-1 text-xs text-slate-500">{getRoleLabel(user.role)}</p>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-500">
                         {user.userId}

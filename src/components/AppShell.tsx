@@ -19,16 +19,16 @@ import { useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { logout } from "../services/authService";
 import { useAuth } from "../providers/AuthProvider";
+import { canAccessModule, getRoleLabel } from "../utils/accessControl";
 import { SidebarLink } from "./layout/SidebarLink";
 
 export function AppShell() {
   const { profile } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const isViewer = profile?.role === "viewer";
-  const isSuperAdmin = profile?.role === "super_admin";
-  const canManage = profile?.role === "super_admin" || profile?.role === "admin";
   const closeSidebar = () => setSidebarOpen(false);
+  const canSee = (moduleId: Parameters<typeof canAccessModule>[1]) =>
+    canAccessModule(profile, moduleId);
 
   async function handleLogout() {
     await logout();
@@ -71,23 +71,19 @@ export function AppShell() {
             </button>
           </div>
           <nav className="space-y-1">
-            <SidebarLink icon={LayoutDashboard} label="Dashboard" onClick={closeSidebar} to="/dashboard" />
-            <SidebarLink icon={Table2} label="SHS Loading" onClick={closeSidebar} to="/loading" />
-            {!isViewer && (
-              <>
-                <SidebarLink icon={GraduationCap} label="Teachers" onClick={closeSidebar} to="/teachers" />
-                <SidebarLink icon={BookOpen} label="Subjects" onClick={closeSidebar} to="/subjects" />
-                <SidebarLink icon={ClipboardList} label="Sections" onClick={closeSidebar} to="/sections" />
-                <SidebarLink icon={GitBranch} label="Curriculum Mapping" onClick={closeSidebar} to="/curriculum-mapping" />
-                <SidebarLink icon={Table2} label="Load Assignment" onClick={closeSidebar} to="/load-assignment" />
-                <SidebarLink icon={CalendarDays} label="Scheduler" onClick={closeSidebar} to="/scheduler" />
-              </>
-            )}
-            <SidebarLink icon={Users} label="Teacher Loads" onClick={closeSidebar} to="/teacher-loads" />
-            <SidebarLink icon={BarChart3} label="Reports" onClick={closeSidebar} to="/reports" />
-            {isSuperAdmin && <SidebarLink icon={Users} label="Users" onClick={closeSidebar} to="/users" />}
-            {canManage && <SidebarLink icon={Settings} label="Settings" onClick={closeSidebar} to="/settings" />}
-            {canManage && <SidebarLink icon={Archive} label="Backup & Restore" onClick={closeSidebar} to="/backup-restore" />}
+            {canSee("dashboard") && <SidebarLink icon={LayoutDashboard} label="Dashboard" onClick={closeSidebar} to="/dashboard" />}
+            {canSee("loading") && <SidebarLink icon={Table2} label="SHS Loading" onClick={closeSidebar} to="/loading" />}
+            {canSee("teachers") && <SidebarLink icon={GraduationCap} label="Teachers" onClick={closeSidebar} to="/teachers" />}
+            {canSee("subjects") && <SidebarLink icon={BookOpen} label="Subjects" onClick={closeSidebar} to="/subjects" />}
+            {canSee("sections") && <SidebarLink icon={ClipboardList} label="Sections" onClick={closeSidebar} to="/sections" />}
+            {canSee("curriculum_mapping") && <SidebarLink icon={GitBranch} label="Curriculum Mapping" onClick={closeSidebar} to="/curriculum-mapping" />}
+            {canSee("load_assignment") && <SidebarLink icon={Table2} label="Load Assignment" onClick={closeSidebar} to="/load-assignment" />}
+            {canSee("scheduler") && <SidebarLink icon={CalendarDays} label="Scheduler" onClick={closeSidebar} to="/scheduler" />}
+            {canSee("teacher_loads") && <SidebarLink icon={Users} label="Teacher Loads" onClick={closeSidebar} to="/teacher-loads" />}
+            {canSee("reports") && <SidebarLink icon={BarChart3} label="Reports" onClick={closeSidebar} to="/reports" />}
+            {profile?.role === "super_admin" && <SidebarLink icon={Users} label="Users" onClick={closeSidebar} to="/users" />}
+            {canSee("settings") && <SidebarLink icon={Settings} label="Settings" onClick={closeSidebar} to="/settings" />}
+            {canSee("backup_restore") && <SidebarLink icon={Archive} label="Backup & Restore" onClick={closeSidebar} to="/backup-restore" />}
           </nav>
         </aside>
 
@@ -104,9 +100,7 @@ export function AppShell() {
               </button>
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-ink">{profile?.fullName}</p>
-                <p className="text-xs capitalize text-slate-500">
-                  {profile?.role.replace("_", " ")}
-                </p>
+                <p className="text-xs text-slate-500">{profile ? getRoleLabel(profile.role) : ""}</p>
               </div>
             </div>
             <button

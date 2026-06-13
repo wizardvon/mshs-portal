@@ -125,6 +125,23 @@ export type AncillaryLoad = {
   updatedAt?: Timestamp;
 };
 
+export type PrintSignatory = {
+  name: string;
+  position: string;
+};
+
+export type SchedulePrintSignatories = {
+  preparedBy: PrintSignatory;
+  checkedBy: PrintSignatory;
+  notedBy: PrintSignatory;
+};
+
+export type SchedulePrintSettings = {
+  classSchedule: SchedulePrintSignatories;
+  teacherSchedule: SchedulePrintSignatories;
+  updatedAt?: Timestamp;
+};
+
 export const subjectCategories: SubjectCategory[] = [
   "Core Subjects",
   "Applied / Specialized Subjects",

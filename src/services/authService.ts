@@ -15,6 +15,7 @@ import {
 import type { User } from "firebase/auth";
 import { auth, db } from "../firebase";
 import type { UserRole } from "../types";
+import { allAppModuleIds, getDefaultModulePermissions } from "../utils/accessControl";
 
 type RegisterInput = {
   fullName: string;
@@ -55,6 +56,9 @@ export async function registerUser({
         email: user.email ?? email,
         role: isFirstUser ? "super_admin" : requestedRole,
         status: isFirstUser ? "approved" : "pending",
+        modulePermissions: isFirstUser
+          ? allAppModuleIds
+          : getDefaultModulePermissions(requestedRole),
         createdAt: serverTimestamp(),
       });
 
@@ -105,6 +109,7 @@ export async function bootstrapSuperAdminProfile(user: User) {
       email: user.email ?? bootstrapEmail,
       role: "super_admin",
       status: "approved",
+      modulePermissions: allAppModuleIds,
       createdAt: profileSnap.exists()
         ? profileSnap.data().createdAt ?? serverTimestamp()
         : serverTimestamp(),

@@ -5,13 +5,14 @@ import { AuthLayout } from "../components/AuthLayout";
 import { SelectField, TextField } from "../components/FormField";
 import { registerUser } from "../services/authService";
 import type { UserRole } from "../types";
+import { registrationRoleOptions } from "../utils/accessControl";
 
 export function RegisterPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [requestedRole, setRequestedRole] = useState<Exclude<UserRole, "super_admin">>("viewer");
+  const [requestedRole, setRequestedRole] = useState<Exclude<UserRole, "super_admin">>("teacher");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
@@ -92,8 +93,11 @@ export function RegisterPage() {
           }
           value={requestedRole}
         >
-          <option value="admin">Admin</option>
-          <option value="viewer">Viewer</option>
+          {registrationRoleOptions.map((role) => (
+            <option key={role.value} value={role.value}>
+              {role.label}
+            </option>
+          ))}
         </SelectField>
         {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <button

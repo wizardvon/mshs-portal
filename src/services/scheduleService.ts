@@ -99,6 +99,10 @@ export async function saveNamedSchedule(
   });
 }
 
+export async function deleteSavedSchedule(savedScheduleId: string) {
+  return deleteDoc(doc(db, "savedSchedules", savedScheduleId));
+}
+
 export async function saveGeneratedSchedule(entries: ClassScheduleEntry[]) {
   const batch = writeBatch(db);
 
