@@ -1910,6 +1910,8 @@ function SummaryCard({ label, value, detail }: { label: string; value: number | 
 export function SchedulerPage() {
   const { profile, user } = useAuth();
   const canEdit = profile?.role === "super_admin" || profile?.role === "admin";
+  const scopedTeacherId = profile?.role === "teacher" ? profile.assignedTeacherId : "";
+  const scopedAdvisingSectionId = profile?.role === "teacher" ? profile.advisingSectionId : "";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
   const [term, setTerm] = useState<AcademicTerm>(defaultTerm);
   const [gradeLevel, setGradeLevel] = useState("all");
@@ -2110,8 +2112,9 @@ export function SchedulerPage() {
   const visibleSections = useMemo(
     () =>
       [...new Map(joinedAssignments.map((assignment) => [assignment.sectionId, assignment.section])).values()]
+        .filter((section) => !scopedAdvisingSectionId || section.sectionId === scopedAdvisingSectionId)
         .sort((first, second) => first.sectionName.localeCompare(second.sectionName)),
-    [joinedAssignments],
+    [joinedAssignments, scopedAdvisingSectionId],
   );
   const selectedSection = useMemo(
     () => visibleSections.find((section) => section.sectionId === selectedSectionId) ?? visibleSections[0],
@@ -2128,11 +2131,13 @@ export function SchedulerPage() {
         if (teacher) teacherMap.set(teacher.teacherId, teacher);
       });
 
-      return [...teacherMap.values()].sort((first, second) =>
-        first.fullName.localeCompare(second.fullName),
-      );
+      return [...teacherMap.values()]
+        .filter((teacher) => !scopedTeacherId || teacher.teacherId === scopedTeacherId)
+        .sort((first, second) =>
+          first.fullName.localeCompare(second.fullName),
+        );
     },
-    [joinedAssignments, teachersById, visibleEntries],
+    [joinedAssignments, scopedTeacherId, teachersById, visibleEntries],
   );
 
   useEffect(() => {

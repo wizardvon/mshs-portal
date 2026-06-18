@@ -29,7 +29,7 @@ export const appModules: Array<{ id: AppModule; label: string }> = [
   { id: "users", label: "Users" },
 ];
 
-export const allAppModuleIds = appModules.map((module) => module.id);
+export const allAppModuleIds: AppModule[] = appModules.map((module) => module.id);
 
 export const defaultModulePermissionsByRole: Record<UserRole, AppModule[]> = {
   super_admin: allAppModuleIds,
@@ -63,14 +63,16 @@ export function getDefaultModulePermissions(role: UserRole) {
   return defaultModulePermissionsByRole[role] ?? ["dashboard"];
 }
 
-export function getUserModulePermissions(profile?: Pick<UserProfile, "role" | "modulePermissions"> | null) {
+export function getUserModulePermissions(
+  profile?: Pick<UserProfile, "role" | "modulePermissions"> | null,
+): AppModule[] {
   if (!profile) return [];
   if (profile.role === "super_admin") return allAppModuleIds;
   const permissions = profile.modulePermissions?.length
     ? profile.modulePermissions
     : getDefaultModulePermissions(profile.role);
 
-  return permissions.includes("dashboard") ? permissions : ["dashboard", ...permissions];
+  return permissions.includes("dashboard") ? permissions : (["dashboard", ...permissions] as AppModule[]);
 }
 
 export function canAccessModule(

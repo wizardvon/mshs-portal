@@ -30,5 +30,7 @@ export type UserProfile = {
   role: UserRole;
   status: UserStatus;
   modulePermissions?: AppModule[];
+  assignedTeacherId?: string;
+  advisingSectionId?: string;
   createdAt: unknown;
 };

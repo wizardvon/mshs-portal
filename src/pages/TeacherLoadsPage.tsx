@@ -10,6 +10,7 @@ import { subscribeSubjects } from "../services/subjectService";
 import { subscribeTeachers } from "../services/teacherService";
 import type { AcademicTerm, AncillaryLoad, LoadAssignment, Section, Subject, Teacher } from "../types/loading";
 import { defaultSchoolYear, termOptions } from "../types/loading";
+import { useAuth } from "../providers/AuthProvider";
 import { getLoadStatus } from "../utils/statusRules";
 
 type TeacherLoadRow = {
@@ -54,6 +55,8 @@ function escapeHtml(value: unknown) {
 }
 
 export function TeacherLoadsPage() {
+  const { profile } = useAuth();
+  const scopedTeacherId = profile?.role === "teacher" ? profile.assignedTeacherId : "";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -82,6 +85,7 @@ export function TeacherLoadsPage() {
     () =>
       teachers
         .filter((teacher) => teacher.status === "active")
+        .filter((teacher) => !scopedTeacherId || teacher.teacherId === scopedTeacherId)
         .map((teacher) => {
           const teacherAssignments = assignments.filter(
             (assignment) =>
@@ -126,8 +130,13 @@ export function TeacherLoadsPage() {
           };
         })
         .sort((first, second) => first.teacher.fullName.localeCompare(second.teacher.fullName)),
-    [ancillaryLoads, assignments, schoolYear, teachers],
+    [ancillaryLoads, assignments, schoolYear, scopedTeacherId, teachers],
   );
+
+  useEffect(() => {
+    if (!scopedTeacherId) return;
+    setSelectedTeacherId(scopedTeacherId);
+  }, [scopedTeacherId]);
 
   const selectedRow = useMemo(
     () => rows.find((row) => row.teacher.teacherId === selectedTeacherId),

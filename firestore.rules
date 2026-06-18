@@ -161,24 +161,6 @@ service cloud.firestore {
       ];
     }
 
-    function validAppModule(moduleId) {
-      return moduleId in [
-        "dashboard",
-        "loading",
-        "teachers",
-        "subjects",
-        "sections",
-        "curriculum_mapping",
-        "load_assignment",
-        "scheduler",
-        "teacher_loads",
-        "reports",
-        "settings",
-        "backup_restore",
-        "users"
-      ];
-    }
-
     function validModulePermissions() {
       return request.resource.data.modulePermissions is list
         && request.resource.data.modulePermissions.size() <= 13
@@ -196,6 +178,36 @@ service cloud.firestore {
           "settings",
           "backup_restore",
           "users"
+        ]);
+    }
+
+    function validOptionalNullableString(fieldName) {
+      return !request.resource.data.keys().hasAny([fieldName])
+        || request.resource.data[fieldName] is string
+        || request.resource.data[fieldName] == null;
+    }
+
+    function validUserProfileWrite(userId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.userId == userId
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.fullName == resource.data.fullName
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validUserRole(request.resource.data.role)
+        && request.resource.data.status in ["approved", "pending", "disabled"]
+        && validModulePermissions()
+        && validOptionalTimestamp("reviewedAt")
+        && validOptionalString("reviewedBy")
+        && validOptionalNullableString("assignedTeacherId")
+        && validOptionalNullableString("advisingSectionId")
+        && changedKeys.hasOnly([
+          "role",
+          "status",
+          "modulePermissions",
+          "assignedTeacherId",
+          "advisingSectionId",
+          "reviewedAt",
+          "reviewedBy"
         ]);
     }
 
@@ -305,7 +317,7 @@ service cloud.firestore {
     match /users/{userId} { 
       allow read: if signedIn() && (request.auth.uid == userId || isApprovedAdmin()); 
       allow create: if validFirstUser(userId) || validBootstrapUser(userId) || validPendingUser(userId); 
-      allow update: if isSuperAdmin() || validBootstrapUser(userId); 
+      allow update: if (isSuperAdmin() && validUserProfileWrite(userId)) || validBootstrapUser(userId); 
       allow delete: if isSuperAdmin(); 
     } 
  
