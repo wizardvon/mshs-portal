@@ -1,4 +1,4 @@
-import { Printer } from "lucide-react";
+import { Printer, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../components/common/PageHeader";
 import { LoadMatrix } from "../components/loading/LoadMatrix";
@@ -6,6 +6,7 @@ import { useAuth } from "../providers/AuthProvider";
 import {
   removeLoadAssignment,
   saveLoadAssignment,
+  syncLoadAssignmentsForPeriod,
   subscribeLoadAssignmentsByPeriod,
 } from "../services/assignmentService";
 import { subscribeCurriculumMappings } from "../services/curriculumService";
@@ -54,7 +55,9 @@ export function LoadAssignmentPage() {
     typeof navigator === "undefined" ? true : navigator.onLine,
   );
   const [isSaving, setIsSaving] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [syncMessage, setSyncMessage] = useState("");
 
   useEffect(() => subscribeTeachers(setTeachers), []);
   useEffect(() => subscribeSubjects(setSubjects), []);
@@ -81,6 +84,7 @@ export function LoadAssignmentPage() {
   useEffect(() => {
     setPendingChanges({});
     setSaveError("");
+    setSyncMessage("");
   }, [schoolYear, term]);
 
   const activeSubjects = useMemo(
@@ -144,6 +148,7 @@ export function LoadAssignmentPage() {
         sectionId: change.section.sectionId,
         teacherId: change.teacherId,
         units: Number(change.subject.units || 0),
+        hoursPerSession: Number(change.subject.hoursPerSession || 0) || undefined,
       });
     });
 
@@ -312,6 +317,7 @@ export function LoadAssignmentPage() {
             sectionId: change.section.sectionId,
             teacherId: change.teacherId,
             units: Number(change.subject.units || 0),
+            hoursPerSession: Number(change.subject.hoursPerSession || 0) || undefined,
           });
         }),
       );
@@ -333,6 +339,52 @@ export function LoadAssignmentPage() {
       setIsSaving(false);
     }
   }, [isSaving, pendingChanges, schoolYear, term]);
+
+  const syncAssignments = useCallback(async () => {
+    if (isSyncing || isSaving) return;
+
+    setIsSyncing(true);
+    setSaveError("");
+    setSyncMessage("");
+
+    try {
+      if (pendingChangeList.length > 0) {
+        await savePendingChanges();
+      }
+
+      const result = await syncLoadAssignmentsForPeriod({
+        assignments,
+        mappings,
+        schoolYear,
+        sections,
+        subjects,
+        term,
+      });
+      const details = [
+        `${result.updated} updated`,
+        `${result.removed} removed`,
+        result.skipped > 0 ? `${result.skipped} skipped` : "",
+      ].filter(Boolean);
+
+      setSyncMessage(`Sync complete: ${details.join(", ")}.`);
+    } catch (error) {
+      console.error(error);
+      setSaveError("Sync failed. Check your connection and try again.");
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [
+    assignments,
+    isSaving,
+    isSyncing,
+    mappings,
+    pendingChangeList.length,
+    savePendingChanges,
+    schoolYear,
+    sections,
+    subjects,
+    term,
+  ]);
 
   useEffect(() => {
     if (!isOnline || pendingChangeList.length === 0 || isSaving || saveError) return;
@@ -558,8 +610,19 @@ export function LoadAssignmentPage() {
             </button>
             {canEdit && (
               <button
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                disabled={isSaving || isSyncing}
+                onClick={() => void syncAssignments()}
+                type="button"
+              >
+                <RefreshCw className={isSyncing ? "animate-spin" : ""} size={16} />
+                {isSyncing ? "Syncing..." : "Sync Loads"}
+              </button>
+            )}
+            {canEdit && (
+              <button
                 className="h-10 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                disabled={pendingChangeList.length === 0 || isSaving}
+                disabled={pendingChangeList.length === 0 || isSaving || isSyncing}
                 onClick={() => void savePendingChanges()}
                 type="button"
               >
@@ -682,9 +745,13 @@ export function LoadAssignmentPage() {
             </select>
           </label>
         </div>
-        {(pendingChangeList.length > 0 || saveError) && (
+        {(pendingChangeList.length > 0 || saveError || syncMessage || isSyncing) && (
           <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600">
             {saveError ||
+              (isSyncing
+                ? "Syncing load assignments with current subjects, sections, and curriculum mappings..."
+                : "") ||
+              syncMessage ||
               (isOnline
                 ? `${pendingChangeList.length} change${pendingChangeList.length === 1 ? "" : "s"} ready to save.`
                 : `${pendingChangeList.length} change${pendingChangeList.length === 1 ? "" : "s"} waiting for internet connection.`)}

@@ -4,6 +4,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { BackupRestorePage } from "./pages/BackupRestorePage";
 import { CurriculumMappingPage } from "./pages/CurriculumMappingPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DllSubmissionsPage } from "./pages/DllSubmissionsPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { LoadAssignmentPage } from "./pages/LoadAssignmentPage";
 import { LoadingDashboardPage } from "./pages/LoadingDashboardPage";
@@ -50,6 +51,9 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute requiredModule="scheduler" />}>
             <Route path="/scheduler" element={<SchedulerPage />} />
+          </Route>
+          <Route element={<ProtectedRoute requiredModule="dll_submissions" />}>
+            <Route path="/dll-submissions" element={<DllSubmissionsPage />} />
           </Route>
           <Route element={<ProtectedRoute requiredModule="settings" />}>
             <Route path="/settings" element={<SettingsPage />} />

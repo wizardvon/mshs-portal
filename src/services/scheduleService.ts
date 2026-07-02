@@ -48,6 +48,20 @@ export const subscribeClassSchedulesByPeriod = (
   });
 };
 
+export const subscribeClassSchedulesBySchoolYear = (
+  schoolYear: string,
+  callback: (entries: ClassScheduleEntry[]) => void,
+) => {
+  const schedulesQuery = query(
+    collection(db, "classSchedules"),
+    where("schoolYear", "==", schoolYear),
+  );
+
+  return onSnapshot(schedulesQuery, (snapshot) => {
+    callback(snapshot.docs.map((item) => item.data() as ClassScheduleEntry));
+  });
+};
+
 export const subscribeSavedSchedulesByContext = (
   schoolYear: string,
   term: AcademicTerm,

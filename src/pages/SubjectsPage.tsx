@@ -17,11 +17,24 @@ import {
 } from "../utils/excelImport";
 import { printTable } from "../utils/printTable";
 
+function getSubjectHoursPerSession(subject: Pick<Subject, "hoursPerSession">) {
+  const hoursPerSession = Number(subject.hoursPerSession || 0);
+  return hoursPerSession > 0 ? hoursPerSession : null;
+}
+
+function getSubjectWeeklySessions(subject: Pick<Subject, "units" | "hoursPerSession">) {
+  const units = Number(subject.units || 0);
+  const hoursPerSession = getSubjectHoursPerSession(subject);
+  if (!hoursPerSession) return "Default rules";
+  return units > 0 ? Math.ceil(units / hoursPerSession) : 0;
+}
+
 const emptySubject = {
   subjectCode: "",
   subjectName: "",
   category: "Core Subjects" as SubjectCategory,
   units: 3,
+  hoursPerSession: 1.5,
   gradeLevel: "11",
   strand: "All",
   term: defaultTerm,
@@ -121,6 +134,7 @@ export function SubjectsPage() {
       subjectName: subject.subjectName,
       category: subject.category,
       units: subject.units,
+      hoursPerSession: getSubjectHoursPerSession(subject) ?? 1.5,
       gradeLevel: subject.gradeLevel,
       strand: subject.strand,
       term: subject.term,
@@ -151,6 +165,8 @@ export function SubjectsPage() {
         { header: "Subject", getValue: (subject) => subject.subjectName },
         { header: "Category", getValue: (subject) => subject.category },
         { header: "Units", getValue: (subject) => subject.units },
+        { header: "Hours / Session", getValue: (subject) => getSubjectHoursPerSession(subject) ?? "Default rules" },
+        { header: "Weekly Sessions", getValue: (subject) => getSubjectWeeklySessions(subject) },
         {
           header: "Grade / Strand",
           getValue: (subject) => `G${subject.gradeLevel} - ${subject.strand}`,
@@ -166,6 +182,7 @@ export function SubjectsPage() {
     { key: "subjectName", label: "subjectName", required: true },
     { key: "category", label: "category", required: true },
     { key: "units", label: "units", required: true },
+    { key: "hoursPerSession", label: "hoursPerSession" },
     { key: "gradeLevel", label: "gradeLevel", required: true },
     { key: "strand", label: "strand", required: true },
     { key: "term", label: "term", required: true },
@@ -177,6 +194,8 @@ export function SubjectsPage() {
     { header: "Subject", render: (subject) => subject.subjectName },
     { header: "Category", render: (subject) => subject.category },
     { header: "Units", render: (subject) => subject.units },
+    { header: "Hours / Session", render: (subject) => getSubjectHoursPerSession(subject) ?? "Default rules" },
+    { header: "Sessions / Week", render: (subject) => getSubjectWeeklySessions(subject) },
     { header: "Grade / Strand", render: (subject) => `G${subject.gradeLevel} - ${subject.strand}` },
     { header: "Term", render: (subject) => subject.term },
     { header: "Status", render: (subject) => <StatusBadge label={subject.status} tone={subject.status === "active" ? "green" : "slate"} /> },
@@ -210,7 +229,7 @@ export function SubjectsPage() {
         <div className="mb-5">
           <ExcelImportButton
             columns={importColumns}
-            formatNote='Accepted files: .xlsx, .xls, .csv. First sheet headers: subjectCode, subjectName, category, units, gradeLevel, strand, term, status. Category must be one of: Core Subjects; Applied / Specialized Subjects; Track / Strand Subjects; Electives / Others. Status is optional.'
+            formatNote='Accepted files: .xlsx, .xls, .csv. First sheet headers: subjectCode, subjectName, category, units, hoursPerSession, gradeLevel, strand, term, status. Category must be one of: Core Subjects; Applied / Specialized Subjects; Track / Strand Subjects; Electives / Others. hoursPerSession and status are optional.'
             onImport={importSubjects}
             transform={(row, rowNumber) => {
               const category = requireText(row.category, rowNumber, "category") as SubjectCategory;
@@ -226,6 +245,9 @@ export function SubjectsPage() {
                 subjectName: requireText(row.subjectName, rowNumber, "subjectName"),
                 category,
                 units: requireNumber(row.units, rowNumber, "units"),
+                hoursPerSession: row.hoursPerSession
+                  ? requireNumber(row.hoursPerSession, rowNumber, "hoursPerSession")
+                  : 1.5,
                 gradeLevel: requireText(row.gradeLevel, rowNumber, "gradeLevel"),
                 strand: requireText(row.strand, rowNumber, "strand"),
                 term,
@@ -282,7 +304,8 @@ export function SubjectsPage() {
           <select className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setForm({ ...form, category: event.target.value as SubjectCategory })} value={form.category}>
             {subjectCategories.map((category) => <option key={category} value={category}>{category}</option>)}
           </select>
-          <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setForm({ ...form, units: Number(event.target.value) })} placeholder="Units" type="number" value={form.units} />
+          <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setForm({ ...form, units: Number(event.target.value) })} placeholder="Units" step="0.5" type="number" value={form.units} />
+          <input className="h-11 rounded-md border border-slate-300 px-3" min={0.5} onChange={(event) => setForm({ ...form, hoursPerSession: Number(event.target.value) })} placeholder="Hours per session" step="0.5" type="number" value={form.hoursPerSession} />
           <select className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setForm({ ...form, gradeLevel: event.target.value })} value={form.gradeLevel}>
             <option value="11">Grade 11</option>
             <option value="12">Grade 12</option>

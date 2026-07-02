@@ -25,6 +25,16 @@ service cloud.firestore {
         && currentProfile().data.status == "approved" 
         && currentProfile().data.role == "super_admin"; 
     } 
+
+    function isApprovedUser() {
+      return signedIn()
+        && currentProfile().data.status == "approved";
+    }
+
+    function isDllReviewer() {
+      return isApprovedUser()
+        && currentProfile().data.role in ["super_admin", "principal", "master_teacher"];
+    }
  
     function isBootstrapSuperAdmin(userId) { 
       return signedIn() 
@@ -163,7 +173,7 @@ service cloud.firestore {
 
     function validModulePermissions() {
       return request.resource.data.modulePermissions is list
-        && request.resource.data.modulePermissions.size() <= 13
+        && request.resource.data.modulePermissions.size() <= 14
         && request.resource.data.modulePermissions.hasOnly([
           "dashboard",
           "loading",
@@ -173,11 +183,176 @@ service cloud.firestore {
           "curriculum_mapping",
           "load_assignment",
           "scheduler",
+          "dll_submissions",
           "teacher_loads",
           "reports",
           "settings",
           "backup_restore",
           "users"
+        ]);
+    }
+
+    function validDllRequestCreate(requestId) {
+      return request.resource.data.requestId == requestId
+        && request.resource.data.title is string
+        && request.resource.data.schoolYear is string
+        && request.resource.data.weekLabel is string
+        && request.resource.data.weekStart is string
+        && request.resource.data.weekEnd is string
+        && request.resource.data.dueDate is string
+        && request.resource.data.status in ["active", "closed"]
+        && request.resource.data.createdBy == request.auth.uid
+        && validOptionalString("instructions")
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "requestId",
+          "title",
+          "schoolYear",
+          "weekLabel",
+          "weekStart",
+          "weekEnd",
+          "dueDate",
+          "instructions",
+          "status",
+          "createdBy",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validDllRequestUpdate(requestId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.requestId == requestId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.title is string
+        && request.resource.data.schoolYear is string
+        && request.resource.data.weekLabel is string
+        && request.resource.data.weekStart is string
+        && request.resource.data.weekEnd is string
+        && request.resource.data.dueDate is string
+        && request.resource.data.status in ["active", "closed"]
+        && validOptionalString("instructions")
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "title",
+          "schoolYear",
+          "weekLabel",
+          "weekStart",
+          "weekEnd",
+          "dueDate",
+          "instructions",
+          "status",
+          "updatedAt"
+        ]);
+    }
+
+    function validDllSubmissionCreate(submissionId) {
+      return request.resource.data.submissionId == submissionId
+        && request.resource.data.requestId is string
+        && request.resource.data.teacherId is string
+        && request.resource.data.teacherName is string
+        && request.resource.data.subjectId is string
+        && request.resource.data.subjectName is string
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.submissionType in ["soft_copy", "hard_copy"]
+        && request.resource.data.link is string
+        && request.resource.data.status == "submitted"
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "submissionId",
+          "requestId",
+          "teacherId",
+          "teacherName",
+          "subjectId",
+          "subjectName",
+          "submittedBy",
+          "submissionType",
+          "link",
+          "status",
+          "submittedAt",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validDllSubmissionTeacherUpdate(submissionId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.submissionId == submissionId
+        && request.resource.data.requestId == resource.data.requestId
+        && request.resource.data.teacherId == resource.data.teacherId
+        && request.resource.data.subjectId == resource.data.subjectId
+        && request.resource.data.submittedBy == resource.data.submittedBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.teacherName is string
+        && request.resource.data.subjectName is string
+        && request.resource.data.submissionType in ["soft_copy", "hard_copy"]
+        && request.resource.data.link is string
+        && request.resource.data.status == "submitted"
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "teacherName",
+          "subjectName",
+          "submissionType",
+          "link",
+          "status",
+          "submittedAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validDllSubmissionReview(submissionId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.submissionId == submissionId
+        && request.resource.data.requestId == resource.data.requestId
+        && request.resource.data.teacherId == resource.data.teacherId
+        && request.resource.data.subjectId == resource.data.subjectId
+        && request.resource.data.teacherName == resource.data.teacherName
+        && request.resource.data.subjectName == resource.data.subjectName
+        && request.resource.data.submittedBy == resource.data.submittedBy
+        && request.resource.data.submissionType == resource.data.submissionType
+        && request.resource.data.link == resource.data.link
+        && request.resource.data.submittedAt == resource.data.submittedAt
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.status in ["submitted", "approved", "returned"]
+        && request.resource.data.remarks is string
+        && request.resource.data.reviewedBy == request.auth.uid
+        && request.resource.data.reviewerName is string
+        && request.resource.data.reviewedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "status",
+          "remarks",
+          "reviewedBy",
+          "reviewerName",
+          "reviewedAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validDllSubmissionArchive(submissionId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.submissionId == submissionId
+        && request.resource.data.requestId == resource.data.requestId
+        && request.resource.data.teacherId == resource.data.teacherId
+        && request.resource.data.subjectId == resource.data.subjectId
+        && request.resource.data.teacherName == resource.data.teacherName
+        && request.resource.data.subjectName == resource.data.subjectName
+        && request.resource.data.submittedBy == resource.data.submittedBy
+        && request.resource.data.submissionType == resource.data.submissionType
+        && request.resource.data.link == resource.data.link
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.submittedAt == resource.data.submittedAt
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.archived == true
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "archived",
+          "updatedAt"
         ]);
     }
 
@@ -306,10 +481,30 @@ service cloud.firestore {
     function validSchedulePrintSettings() {
       return validSignatoryGroup("classSchedule")
         && validSignatoryGroup("teacherSchedule")
+        && request.resource.data.scheduleTimeSlots is map
+        && request.resource.data.scheduleTimeSlots.keys().hasOnly([
+          "grade11Academic",
+          "grade11TechPro",
+          "grade12"
+        ])
+        && request.resource.data.scheduleTimeSlots.grade11Academic is list
+        && request.resource.data.scheduleTimeSlots.grade11TechPro is list
+        && request.resource.data.scheduleTimeSlots.grade12 is list
+        && request.resource.data.scheduleBreaks is map
+        && request.resource.data.scheduleBreaks.keys().hasOnly([
+          "grade11Academic",
+          "grade11TechPro",
+          "grade12"
+        ])
+        && request.resource.data.scheduleBreaks.grade11Academic is list
+        && request.resource.data.scheduleBreaks.grade11TechPro is list
+        && request.resource.data.scheduleBreaks.grade12 is list
         && request.resource.data.updatedAt == request.time
         && request.resource.data.keys().hasOnly([
           "classSchedule",
           "teacherSchedule",
+          "scheduleTimeSlots",
+          "scheduleBreaks",
           "updatedAt"
         ]);
     }
@@ -346,6 +541,39 @@ service cloud.firestore {
         && settingId == "schedulePrint"
         && validSchedulePrintSettings();
       allow delete: if false;
+    }
+
+    match /dllRequests/{requestId} {
+      allow read: if isApprovedUser();
+      allow create: if isSuperAdmin() && validDllRequestCreate(requestId);
+      allow update: if isSuperAdmin() && validDllRequestUpdate(requestId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /dllSubmissions/{submissionId} {
+      allow read: if isDllReviewer()
+        || (
+          isApprovedUser()
+          && currentProfile().data.role == "teacher"
+          && currentProfile().data.assignedTeacherId == resource.data.teacherId
+        );
+      allow create: if isApprovedUser()
+        && currentProfile().data.role == "teacher"
+        && currentProfile().data.assignedTeacherId == request.resource.data.teacherId
+        && validDllSubmissionCreate(submissionId);
+      allow update: if (
+          isApprovedUser()
+          && currentProfile().data.role == "teacher"
+          && currentProfile().data.assignedTeacherId == resource.data.teacherId
+          && validDllSubmissionTeacherUpdate(submissionId)
+        ) || (
+          isDllReviewer()
+          && validDllSubmissionReview(submissionId)
+        ) || (
+          isSuperAdmin()
+          && validDllSubmissionArchive(submissionId)
+        );
+      allow delete: if isSuperAdmin();
     }
  
     match /{loadingCollection}/{recordId} { 

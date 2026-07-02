@@ -17,6 +17,7 @@ export type AppModule =
   | "curriculum_mapping"
   | "load_assignment"
   | "scheduler"
+  | "dll_submissions"
   | "teacher_loads"
   | "reports"
   | "settings"

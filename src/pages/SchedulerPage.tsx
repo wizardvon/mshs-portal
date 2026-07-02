@@ -1,14 +1,16 @@
-import { CalendarDays, ChevronLeft, ChevronRight, GripVertical, Lock, Printer, RefreshCw, RotateCcw, Trash2, Unlock } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, GripVertical, Lock, Pencil, Plus, Printer, RefreshCw, Trash2, Unlock, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/common/PageHeader";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { useAuth } from "../providers/AuthProvider";
 import { subscribeAncillaryLoads } from "../services/ancillaryLoadService";
-import { subscribeLoadAssignmentsByPeriod } from "../services/assignmentService";
+import { subscribeLoadAssignmentsByPeriod, syncLoadAssignmentsForPeriod } from "../services/assignmentService";
+import { subscribeCurriculumMappings } from "../services/curriculumService";
 import {
   deleteSavedSchedule,
   replaceSchedulesByPeriod,
   resetSchedulesByContextSafely,
+  saveScheduleEntry,
   saveNamedSchedule,
   subscribeClassSchedulesByPeriod,
   subscribeSavedSchedulesByContext,
@@ -27,8 +29,11 @@ import type {
   AcademicTerm,
   AncillaryLoad,
   ClassScheduleEntry,
+  CurriculumMapping,
   LoadAssignment,
   SchedulePrintSettings,
+  ScheduleTemplateKey,
+  ScheduleTimeSlot,
   SavedSchedule,
   ScheduleDay,
   Section,
@@ -41,14 +46,18 @@ type ViewMode = "section" | "teacher";
 type GenerationMode = "fast" | "best";
 type AutoPlotMode = "empty" | "move";
 type AutoPlotScope = "selected" | "all";
-type Slot = {
-  slotId: string;
-  startTime: string;
-  endTime: string;
-  duration: number;
-  label: string;
-};
+type DraggedCustomLoad =
+  | { type: "existing"; scheduleId: string }
+  | { type: "activity" };
+type Slot = ScheduleTimeSlot;
 type BreakRow = { label: string; startTime: string; endTime: string };
+type CustomScheduleForm = {
+  sectionId: string;
+  teacherId: string;
+  title: string;
+  hours: string;
+  room: string;
+};
 type Conflict = {
   assignmentId: string;
   type: "unscheduled" | "conflict" | "special" | "score";
@@ -124,6 +133,9 @@ const days: ScheduleDay[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Frid
 const bestFitSearchMs = 60000;
 const bestFitMaxCombinations = 500000;
 const bestFitProgressEvery = 250;
+const noSectionLabel = "No section";
+const noSectionFormValue = "__no_section__";
+const unlimitedActivityTitle = "Remediation, ARAL, Turorial and Extra curricular Activities";
 
 const fourSessionDayPattern: ScheduleDay[][] = [
   ["Monday", "Tuesday", "Wednesday", "Thursday"],
@@ -133,56 +145,38 @@ const fourSessionDayPattern: ScheduleDay[][] = [
   ["Monday", "Tuesday", "Wednesday", "Thursday"],
 ];
 
-const grade11AcademicSlots: Slot[] = [
-  { slotId: "g11-0700-0830", startTime: "7:00", endTime: "8:30", duration: 1.5, label: "7:00-8:30" },
-  { slotId: "g11-0830-1000", startTime: "8:30", endTime: "10:00", duration: 1.5, label: "8:30-10:00" },
-  { slotId: "g11-1015-1145", startTime: "10:15", endTime: "11:45", duration: 1.5, label: "10:15-11:45" },
-  { slotId: "g11-1230-1400", startTime: "12:30", endTime: "2:00", duration: 1.5, label: "12:30-2:00" },
-  { slotId: "g11-1400-1600", startTime: "2:00", endTime: "4:00", duration: 2, label: "2:00-4:00" },
-];
+let activeScheduleTimeSlots = defaultSchedulePrintSettings.scheduleTimeSlots;
+let activeScheduleBreaks = defaultSchedulePrintSettings.scheduleBreaks;
 
-const grade11TechProSlots: Slot[] = [
-  { slotId: "g11-techpro-0700-0830", startTime: "7:00", endTime: "8:30", duration: 1.5, label: "7:00-8:30" },
-  { slotId: "g11-techpro-0830-1000", startTime: "8:30", endTime: "10:00", duration: 1.5, label: "8:30-10:00" },
-  { slotId: "g11-techpro-1015-1145", startTime: "10:15", endTime: "11:45", duration: 1.5, label: "10:15-11:45" },
-  { slotId: "g11-techpro-1230-1400", startTime: "12:30", endTime: "2:00", duration: 1.5, label: "12:30-2:00" },
-  { slotId: "g11-techpro-1400-1630", startTime: "2:00", endTime: "4:30", duration: 2.5, label: "2:00-4:30" },
-];
+function setActiveScheduleTimeSlots(settings: SchedulePrintSettings) {
+  activeScheduleTimeSlots = settings.scheduleTimeSlots;
+  activeScheduleBreaks = settings.scheduleBreaks;
+}
 
-const grade12Slots: Slot[] = [
-  { slotId: "g12-0700-0900", startTime: "7:00", endTime: "9:00", duration: 2, label: "7:00-9:00" },
-  { slotId: "g12-0915-1115", startTime: "9:15", endTime: "11:15", duration: 2, label: "9:15-11:15" },
-  { slotId: "g12-1200-1400", startTime: "12:00", endTime: "2:00", duration: 2, label: "12:00-2:00" },
-  { slotId: "g12-1400-1600", startTime: "2:00", endTime: "4:00", duration: 2, label: "2:00-4:00" },
-];
+function getTemplateSlots(templateKey: ScheduleTemplateKey) {
+  return activeScheduleTimeSlots[templateKey]?.length
+    ? activeScheduleTimeSlots[templateKey]
+    : defaultSchedulePrintSettings.scheduleTimeSlots[templateKey];
+}
 
-const allDisplaySlots = [
-  ...grade11AcademicSlots,
-  ...grade11TechProSlots,
-  ...grade12Slots,
-]
-  .filter(
-    (slot, index, array) =>
-      array.findIndex(
-        (item) => item.startTime === slot.startTime && item.endTime === slot.endTime,
-      ) === index,
-  )
-  .sort(
-  (first, second) =>
-    timeToMinutes(first.startTime) - timeToMinutes(second.startTime) ||
-    timeToMinutes(first.endTime) - timeToMinutes(second.endTime),
-  );
-
-const gradeBreaks: Record<string, BreakRow[]> = {
-  "11": [
-    { label: "Health Break", startTime: "10:00", endTime: "10:15" },
-    { label: "Lunch Break", startTime: "11:45", endTime: "12:30" },
-  ],
-  "12": [
-    { label: "Health Break", startTime: "9:00", endTime: "9:15" },
-    { label: "Lunch Break", startTime: "11:15", endTime: "12:00" },
-  ],
-};
+function getAllDisplaySlots() {
+  return [
+    ...getTemplateSlots("grade11Academic"),
+    ...getTemplateSlots("grade11TechPro"),
+    ...getTemplateSlots("grade12"),
+  ]
+    .filter(
+      (slot, index, array) =>
+        array.findIndex(
+          (item) => item.startTime === slot.startTime && item.endTime === slot.endTime,
+        ) === index,
+    )
+    .sort(
+      (first, second) =>
+        timeToMinutes(first.startTime) - timeToMinutes(second.startTime) ||
+        timeToMinutes(first.endTime) - timeToMinutes(second.endTime),
+    );
+}
 
 function normalizeGrade(value: string) {
   return value.replace(/grade/i, "").trim();
@@ -218,24 +212,31 @@ function getTemplateLabel(section?: Section, gradeLevel?: string) {
 
 function getSlotsForSection(section?: Section, gradeLevel?: string) {
   const templateType = getTemplateType(section, gradeLevel);
-  if (templateType === "grade12") return grade12Slots;
-  if (templateType === "grade11_techpro") return grade11TechProSlots;
-  return grade11AcademicSlots;
+  if (templateType === "grade12") return getTemplateSlots("grade12");
+  if (templateType === "grade11_techpro") return getTemplateSlots("grade11TechPro");
+  return getTemplateSlots("grade11Academic");
 }
 
 function getSlots(gradeLevel: string) {
-  return normalizeGrade(gradeLevel) === "12" ? grade12Slots : grade11AcademicSlots;
+  return normalizeGrade(gradeLevel) === "12" ? getTemplateSlots("grade12") : getTemplateSlots("grade11Academic");
 }
 
 function getSlotsForEntryTemplate(entry: ClassScheduleEntry) {
-  if (entry.templateType === "grade12") return grade12Slots;
-  if (entry.templateType === "grade11_techpro") return grade11TechProSlots;
-  if (entry.templateType === "grade11_academic") return grade11AcademicSlots;
+  if (entry.templateType === "grade12") return getTemplateSlots("grade12");
+  if (entry.templateType === "grade11_techpro") return getTemplateSlots("grade11TechPro");
+  if (entry.templateType === "grade11_academic") return getTemplateSlots("grade11Academic");
   return getSlots(entry.gradeLevel);
 }
 
-function getBreaks(gradeLevel: string) {
-  return gradeBreaks[normalizeGrade(gradeLevel)] ?? gradeBreaks["11"];
+function getBreaksForSection(section?: Section, gradeLevel?: string) {
+  const templateType = getTemplateType(section, gradeLevel);
+  const templateKey =
+    templateType === "grade12"
+      ? "grade12"
+      : templateType === "grade11_techpro"
+        ? "grade11TechPro"
+        : "grade11Academic";
+  return activeScheduleBreaks[templateKey] ?? defaultSchedulePrintSettings.scheduleBreaks[templateKey];
 }
 
 function timeToMinutes(value: string) {
@@ -267,6 +268,24 @@ function entriesOverlap(first: ClassScheduleEntry, second: ClassScheduleEntry) {
   if (first.day !== second.day) return false;
 
   return timeRangesOverlap(first.startTime, first.endTime, second.startTime, second.endTime);
+}
+
+function isCustomScheduleEntry(entry: ClassScheduleEntry) {
+  return entry.custom === true || entry.sourceAssignmentId.startsWith("custom:");
+}
+
+function getEntryTitle(entry: ClassScheduleEntry, subjectsById: Map<string, Subject>) {
+  return isCustomScheduleEntry(entry)
+    ? entry.customTitle || entry.subjectId || "Special Task"
+    : subjectsById.get(entry.subjectId)?.subjectName ?? entry.subjectId;
+}
+
+function getCustomEntryLabel(entry: ClassScheduleEntry) {
+  return entry.customDetails || "Special Task";
+}
+
+function getEntrySectionLabel(entry: Pick<ClassScheduleEntry, "sectionId">, sectionsById: Map<string, Section>) {
+  return entry.sectionId ? sectionsById.get(entry.sectionId)?.sectionName ?? entry.sectionId : noSectionLabel;
 }
 
 function escapeHtml(value: unknown) {
@@ -301,7 +320,30 @@ function getScheduleId(
 
 function sessionsForAssignment(assignment: JoinedAssignment) {
   const grade = normalizeGrade(assignment.gradeLevel || assignment.section.gradeLevel);
-  const units = Number(assignment.units || assignment.subject.units || 0);
+  const units = getJoinedAssignmentUnits(assignment);
+  const hoursPerSession = getJoinedAssignmentHoursPerSession(assignment);
+  const templateType = getTemplateType(assignment.section, assignment.gradeLevel);
+
+  if (hoursPerSession > 0) {
+    const sessions = units > 0 ? Math.ceil(units / hoursPerSession) : 0;
+    const slots = getSlotsForSection(assignment.section, grade);
+    const hasCompatibleSlot = slots.some((slot) => canSlotFitDuration(slot, hoursPerSession));
+
+    return {
+      sessions,
+      duration: hoursPerSession,
+      priority: Math.max(1, 7 - sessions),
+      special: !hasCompatibleSlot,
+    };
+  }
+
+  if (grade === "11" && units === 5) return { sessions: 5, duration: 1, priority: 4, special: false };
+  if (grade === "11" && units === 7.5) return { sessions: 5, duration: 1.5, priority: 3, special: false };
+  if (grade === "11" && templateType === "grade11_techpro" && units === 10) {
+    return { sessions: 5, duration: 2, priority: 2, special: false };
+  }
+  if (grade === "12" && units === 6) return { sessions: 4, duration: 1.5, priority: 3, special: false };
+  if (grade === "12" && units === 12) return { sessions: 8, duration: 1.5, priority: 1, special: false };
 
   if (units === 3) return { sessions: 2, duration: 1.5, priority: 4, special: false };
   if (units === 6) return { sessions: 4, duration: 1.5, priority: 3, special: false };
@@ -322,12 +364,29 @@ function sessionsForAssignment(assignment: JoinedAssignment) {
   return { sessions: 1, duration: units > 0 ? units : 1, priority: 6, special: true };
 }
 
+function canSlotFitDuration(slot: Slot, duration: number) {
+  return slot.duration >= duration;
+}
+
 function isFixedTechProAssignment(assignment: JoinedAssignment) {
-  const units = Number(assignment.units || assignment.subject.units || 0);
+  const units = getJoinedAssignmentUnits(assignment);
   return (
     units === 12.5 &&
     getTemplateType(assignment.section, assignment.gradeLevel) === "grade11_techpro"
   );
+}
+
+function getJoinedAssignmentUnits(assignment: JoinedAssignment) {
+  return Number(assignment.subject.units ?? assignment.units ?? 0);
+}
+
+function getJoinedAssignmentHoursPerSession(assignment: JoinedAssignment) {
+  return Number(assignment.subject.hoursPerSession ?? assignment.hoursPerSession ?? 0);
+}
+
+function prefersGrade11AfternoonSlot(assignment: JoinedAssignment) {
+  const units = getJoinedAssignmentUnits(assignment);
+  return normalizeGrade(assignment.gradeLevel) === "11" && (units === 7.5 || units === 10);
 }
 
 function createScheduleEntry(session: RequiredSession, day: ScheduleDay, slot: Slot): ClassScheduleEntry {
@@ -345,8 +404,8 @@ function createScheduleEntry(session: RequiredSession, day: ScheduleDay, slot: S
     room: room || undefined,
     day,
     startTime: slot.startTime,
-    endTime: slot.endTime,
-    duration: slot.duration,
+    endTime: getEndTimeForDuration(slot.startTime, session.duration),
+    duration: session.duration,
     slotId: slot.slotId,
     sourceAssignmentId: session.assignment.assignmentId,
     templateType: getTemplateType(session.assignment.section, session.assignment.gradeLevel),
@@ -358,8 +417,7 @@ function moveEntryToSlot(entry: ClassScheduleEntry, day: ScheduleDay, slot: Slot
     ...entry,
     day,
     startTime: slot.startTime,
-    endTime: slot.endTime,
-    duration: slot.duration,
+    endTime: getEndTimeForDuration(slot.startTime, entry.duration),
     slotId: slot.slotId,
   };
 }
@@ -375,28 +433,24 @@ function moveEntryToManualSlot(entry: ClassScheduleEntry, day: ScheduleDay, slot
 }
 
 function hasTeacherConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+  if (!entry.teacherId) return false;
+
   return currentSchedule.some(
     (item) =>
+      Boolean(item.teacherId) &&
       item.teacherId === entry.teacherId &&
       entriesOverlap(item, entry),
   );
 }
 
 function hasSectionConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
+  if (!entry.sectionId) return false;
+
   return currentSchedule.some(
     (item) =>
+      Boolean(item.sectionId) &&
       item.sectionId === entry.sectionId &&
       entriesOverlap(item, entry),
-  );
-}
-
-function hasSameSubjectTeacherSectionDayConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
-  return currentSchedule.some(
-    (item) =>
-      item.sectionId === entry.sectionId &&
-      item.subjectId === entry.subjectId &&
-      item.teacherId === entry.teacherId &&
-      item.day === entry.day,
   );
 }
 
@@ -413,14 +467,11 @@ function hasRoomConflict(entry: ClassScheduleEntry, currentSchedule: ClassSchedu
 function hasHardConflict(
   entry: ClassScheduleEntry,
   currentSchedule: ClassScheduleEntry[],
-  options: { allowSameSubjectTeacherSectionDay?: boolean } = {},
 ) {
   return (
     currentSchedule.some((item) => item.scheduleId === entry.scheduleId) ||
     hasTeacherConflict(entry, currentSchedule) ||
     hasSectionConflict(entry, currentSchedule) ||
-    (!options.allowSameSubjectTeacherSectionDay &&
-      hasSameSubjectTeacherSectionDayConflict(entry, currentSchedule)) ||
     hasRoomConflict(entry, currentSchedule)
   );
 }
@@ -428,36 +479,27 @@ function hasHardConflict(
 function getHardConflictReason(
   entry: ClassScheduleEntry,
   currentSchedule: ClassScheduleEntry[],
-  options: { allowSectionOverlap?: boolean; allowSameSubjectTeacherSectionDay?: boolean } = {},
+  options: { allowSectionOverlap?: boolean } = {},
 ) {
   const duplicate = currentSchedule.find((item) => item.scheduleId === entry.scheduleId);
   if (duplicate) return "Cannot place here. Duplicate schedule entry.";
 
-  const teacherConflict = currentSchedule.find(
-    (item) => item.teacherId === entry.teacherId && entriesOverlap(item, entry),
-  );
+  const teacherConflict = entry.teacherId
+    ? currentSchedule.find(
+        (item) => item.teacherId && item.teacherId === entry.teacherId && entriesOverlap(item, entry),
+      )
+    : undefined;
   if (teacherConflict) {
     return `Cannot place here. Teacher has an overlapping class (${teacherConflict.startTime}-${teacherConflict.endTime}).`;
   }
 
   if (!options.allowSectionOverlap) {
-    const sectionConflict = currentSchedule.find(
-      (item) => item.sectionId === entry.sectionId && entriesOverlap(item, entry),
-    );
+    const sectionConflict = entry.sectionId
+      ? currentSchedule.find(
+          (item) => item.sectionId && item.sectionId === entry.sectionId && entriesOverlap(item, entry),
+        )
+      : undefined;
     if (sectionConflict) return "Cannot place here. Section already has a class.";
-  }
-
-  if (!options.allowSameSubjectTeacherSectionDay) {
-    const sameSubjectTeacherSectionDayConflict = currentSchedule.find(
-      (item) =>
-        item.sectionId === entry.sectionId &&
-        item.subjectId === entry.subjectId &&
-        item.teacherId === entry.teacherId &&
-        item.day === entry.day,
-    );
-    if (sameSubjectTeacherSectionDayConflict) {
-      return "Cannot place here. The same subject-teacher for this section is already scheduled on this day.";
-    }
   }
 
   const roomConflict = entry.room
@@ -472,10 +514,10 @@ function getOverlapWarnings(entry: ClassScheduleEntry, currentSchedule: ClassSch
   return currentSchedule
     .filter((item) => item.scheduleId !== entry.scheduleId && entriesOverlap(item, entry))
     .flatMap((item) => {
-      if (entityField === "teacherId" && item.teacherId === entry.teacherId) {
+      if (entityField === "teacherId" && entry.teacherId && item.teacherId === entry.teacherId) {
         return [`Teacher time conflict: overlaps with ${item.startTime}-${item.endTime}`];
       }
-      if (entityField === "sectionId" && item.sectionId === entry.sectionId) {
+      if (entityField === "sectionId" && entry.sectionId && item.sectionId === entry.sectionId) {
         return [`Section time conflict: overlaps with ${item.startTime}-${item.endTime}`];
       }
       if (entry.room && item.room === entry.room) {
@@ -552,25 +594,8 @@ function validateScheduleEntries(entries: ClassScheduleEntry[]) {
     seenEntryKeys.add(duplicateKey);
 
     entries.slice(index + 1).forEach((other) => {
-      if (
-        entry.sectionId === other.sectionId &&
-        entry.subjectId === other.subjectId &&
-        entry.teacherId === other.teacherId &&
-        entry.day === other.day
-      ) {
-        conflicts.push({
-          assignmentId: `${entry.sourceAssignmentId}-same-subject-teacher-section-day-${index}`,
-          type: "conflict",
-          subjectName: entry.subjectId,
-          sectionName: entry.sectionId,
-          teacherName: entry.teacherId,
-          reason: "Same subject-teacher is scheduled more than once for this section on the same day.",
-          sessions: 1,
-        });
-      }
-
       if (!entriesOverlap(entry, other)) return;
-      if (entry.teacherId === other.teacherId) {
+      if (entry.teacherId && other.teacherId && entry.teacherId === other.teacherId) {
         conflicts.push({
           assignmentId: `${entry.sourceAssignmentId}-teacher-overlap-${index}`,
           type: "conflict",
@@ -581,7 +606,7 @@ function validateScheduleEntries(entries: ClassScheduleEntry[]) {
           sessions: 1,
         });
       }
-      if (entry.sectionId === other.sectionId) {
+      if (entry.sectionId && other.sectionId && entry.sectionId === other.sectionId) {
         conflicts.push({
           assignmentId: `${entry.sourceAssignmentId}-section-overlap-${index}`,
           type: "conflict",
@@ -620,7 +645,7 @@ function buildRequiredSessions(assignments: JoinedAssignment[], lockedEntries: C
 
   assignments.forEach((assignment) => {
     const rule = sessionsForAssignment(assignment);
-    const units = Number(assignment.units || assignment.subject.units || 0);
+    const units = getJoinedAssignmentUnits(assignment);
     const lockedCount = lockedCounts.get(assignment.assignmentId) ?? 0;
 
     if (rule.special) {
@@ -649,7 +674,7 @@ function buildRequiredSessions(assignments: JoinedAssignment[], lockedEntries: C
         totalSessions: rule.sessions,
         priority: rule.priority,
         units,
-        preferElectiveSlot: normalizeGrade(assignment.gradeLevel) === "11" && (units === 8 || units === 12.5),
+        preferElectiveSlot: prefersGrade11AfternoonSlot(assignment),
       });
     });
   });
@@ -668,7 +693,7 @@ function buildRemainingSessions(assignments: JoinedAssignment[], existingEntries
 
   assignments.forEach((assignment) => {
     const rule = sessionsForAssignment(assignment);
-    const units = Number(assignment.units || assignment.subject.units || 0);
+    const units = getJoinedAssignmentUnits(assignment);
     const existingCount = existingCounts.get(assignment.assignmentId) ?? 0;
 
     if (rule.special) {
@@ -697,7 +722,7 @@ function buildRemainingSessions(assignments: JoinedAssignment[], existingEntries
         totalSessions: rule.sessions,
         priority: rule.priority,
         units,
-        preferElectiveSlot: normalizeGrade(assignment.gradeLevel) === "11" && (units === 8 || units === 12.5),
+        preferElectiveSlot: prefersGrade11AfternoonSlot(assignment),
       });
     });
   });
@@ -741,7 +766,7 @@ function candidatePreferenceScore(
 function getCandidateSlots(session: RequiredSession, currentSchedule: ClassScheduleEntry[]) {
   const slots = getSlotsForSection(session.assignment.section, session.assignment.gradeLevel);
   const slotCandidates = slots
-    .filter((slot) => slot.duration === session.duration)
+    .filter((slot) => canSlotFitDuration(slot, session.duration))
     .sort((first, second) => {
       if (!session.preferElectiveSlot) return 0;
       return Number(second.slotId.includes("1400")) - Number(first.slotId.includes("1400"));
@@ -779,7 +804,7 @@ function getCandidateSlots(session: RequiredSession, currentSchedule: ClassSched
 
 function getAllCandidateSlots(session: RequiredSession) {
   return getSlotsForSection(session.assignment.section, session.assignment.gradeLevel)
-    .filter((slot) => slot.duration === session.duration)
+    .filter((slot) => canSlotFitDuration(slot, session.duration))
     .flatMap((slot) => days.map((day) => ({ day, slot })));
 }
 
@@ -794,10 +819,6 @@ function getPlacementBlockers(entry: ClassScheduleEntry, currentSchedule: ClassS
   );
 }
 
-function hasSameSubjectTeacherDayOnlyConflict(entry: ClassScheduleEntry, currentSchedule: ClassScheduleEntry[]) {
-  return hasSameSubjectTeacherSectionDayConflict(entry, currentSchedule);
-}
-
 function explainUnscheduledSession(session: RequiredSession, currentSchedule: ClassScheduleEntry[]) {
   const candidates = getAllCandidateSlots(session);
   if (candidates.length === 0) {
@@ -809,24 +830,11 @@ function explainUnscheduledSession(session: RequiredSession, currentSchedule: Cl
     section: 0,
     room: 0,
     locked: 0,
-    sameDay: 0,
   };
 
   candidates.forEach((candidate) => {
     const entry = createScheduleEntry(session, candidate.day, candidate.slot);
     const blockers = currentSchedule.filter((item) => entriesOverlap(item, entry));
-
-    if (
-      currentSchedule.some(
-        (item) =>
-          item.sectionId === entry.sectionId &&
-          item.subjectId === entry.subjectId &&
-          item.teacherId === entry.teacherId &&
-          item.day === entry.day,
-      )
-    ) {
-      counts.sameDay += 1;
-    }
 
     blockers.forEach((blocker) => {
       if (blocker.locked) counts.locked += 1;
@@ -841,12 +849,11 @@ function explainUnscheduledSession(session: RequiredSession, currentSchedule: Cl
     { label: "section conflict", count: counts.section },
     { label: "room conflict", count: counts.room },
     { label: "locked entries", count: counts.locked },
-    { label: "same subject-teacher already on that day", count: counts.sameDay },
   ].sort((first, second) => second.count - first.count);
   const primary = orderedReasons[0];
 
   if (!primary || primary.count === 0) {
-    return "No valid conflict-free slot was available after checking teacher, section, room, and same-day subject rules.";
+    return "No valid conflict-free slot was available after checking teacher, section, and room rules.";
   }
 
   return `No valid slot was available. Mostly blocked by ${primary.label}.`;
@@ -1000,7 +1007,7 @@ function scoreSchedule(
   requiredSessions: RequiredSession[],
   specialConflicts: Conflict[],
 ) {
-  const slots = allDisplaySlots;
+  const slots = getAllDisplaySlots();
   const scheduledSourceCounts = new Map<string, number>();
   const requiredByAssignmentId = new Map(
     requiredSessions.map((session) => [session.assignment.assignmentId, session.assignment]),
@@ -1210,7 +1217,7 @@ function findExistingEntryMoveOptions(
   if (entry.locked || visitedScheduleIds.has(entry.scheduleId)) return [];
 
   const slots = getSlotsForEntryTemplate(entry).filter(
-    (slot) => slot.duration === entry.duration,
+    (slot) => canSlotFitDuration(slot, entry.duration),
   );
   const baseVisited = new Set(visitedScheduleIds);
   baseVisited.add(entry.scheduleId);
@@ -1225,8 +1232,6 @@ function findExistingEntryMoveOptions(
         moved.endTime !== entry.endTime,
     )
     .flatMap((moved) => {
-      if (hasSameSubjectTeacherDayOnlyConflict(moved, currentSchedule)) return [];
-
       const blockers = getPlacementBlockers(moved, currentSchedule).filter(
         (blocker) => blocker.scheduleId !== entry.scheduleId,
       );
@@ -1321,7 +1326,6 @@ function findRepairOptionsForSession(
   return getAllCandidateSlots(session)
     .flatMap((candidate) => {
       const entry = createScheduleEntry(session, candidate.day, candidate.slot);
-      if (hasSameSubjectTeacherDayOnlyConflict(entry, currentSchedule)) return [];
 
       const directConflictReason = getHardConflictReason(entry, currentSchedule);
       if (!directConflictReason) {
@@ -1466,7 +1470,7 @@ function findSafeMoveForEntry(
 ) {
   const assignment = assignments.find((item) => item.assignmentId === entry.sourceAssignmentId);
   const sectionSlots = getSlotsForSection(assignment?.section, entry.gradeLevel).filter(
-    (slot) => slot.duration === entry.duration,
+    (slot) => canSlotFitDuration(slot, entry.duration),
   );
   const otherEntries = entries.filter((item) => item.scheduleId !== entry.scheduleId);
   const options = sectionSlots
@@ -1506,7 +1510,7 @@ function autoPlotTeacherEntries(
 
     if (allowMovingUnlockedEntries) {
       const slots = getSlotsForSection(session.assignment.section, session.assignment.gradeLevel)
-        .filter((slot) => slot.duration === session.duration);
+        .filter((slot) => canSlotFitDuration(slot, session.duration));
       const moveResult = slots
         .flatMap((slot) => days.map((day) => ({ day, slot })))
         .map((target) => {
@@ -1617,7 +1621,7 @@ function runFeasibilityCheck(assignments: JoinedAssignment[], lockedEntries: Cla
 
     const slots = getSlotsForSection(section, section.gradeLevel);
     const requiredHours = sectionAssignments.reduce(
-      (sum, assignment) => sum + Number(assignment.units || assignment.subject.units || 0),
+      (sum, assignment) => sum + getJoinedAssignmentUnits(assignment),
       0,
     );
     const availableHours = getAvailableHoursForSlots(slots);
@@ -1649,7 +1653,7 @@ function runFeasibilityCheck(assignments: JoinedAssignment[], lockedEntries: Cla
     }
     sectionAssignments.forEach((assignment) => {
       const rule = sessionsForAssignment(assignment);
-      const hasCompatibleSlot = slots.some((slot) => slot.duration === rule.duration);
+      const hasCompatibleSlot = slots.some((slot) => canSlotFitDuration(slot, rule.duration));
 
       if (!hasCompatibleSlot) {
         errors.push(
@@ -1664,7 +1668,7 @@ function runFeasibilityCheck(assignments: JoinedAssignment[], lockedEntries: Cla
     if (!teacher) return;
 
     const assignedHours = teacherAssignments.reduce(
-      (sum, assignment) => sum + Number(assignment.units || assignment.subject.units || 0),
+      (sum, assignment) => sum + getJoinedAssignmentUnits(assignment),
       0,
     );
     const uniqueSlots = [
@@ -1727,9 +1731,9 @@ function runFeasibilityCheck(assignments: JoinedAssignment[], lockedEntries: Cla
     const allowedSlots = getSlotsForSection(assignment.section, assignment.gradeLevel);
     const fitsAllowedSlot = allowedSlots.some(
       (slot) =>
+        slot.slotId === entry.slotId &&
         slot.startTime === entry.startTime &&
-        slot.endTime === entry.endTime &&
-        slot.duration === entry.duration,
+        canSlotFitDuration(slot, entry.duration),
     );
 
     if (!fitsAllowedSlot) {
@@ -1754,7 +1758,7 @@ function runFeasibilityCheck(assignments: JoinedAssignment[], lockedEntries: Cla
       if (entry.teacherId === other.teacherId) {
         errors.push(`Locked blocks overlap for the same teacher: ${firstLabel} and ${secondLabel}.`);
       }
-      if (entry.sectionId === other.sectionId) {
+      if (entry.sectionId && other.sectionId && entry.sectionId === other.sectionId) {
         errors.push(`Locked blocks overlap for the same section: ${firstLabel} and ${secondLabel}.`);
       }
       if (entry.room && entry.room === other.room) {
@@ -1923,6 +1927,7 @@ export function SchedulerPage() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [assignments, setAssignments] = useState<LoadAssignment[]>([]);
+  const [curriculumMappings, setCurriculumMappings] = useState<CurriculumMapping[]>([]);
   const [ancillaryLoads, setAncillaryLoads] = useState<AncillaryLoad[]>([]);
   const [savedEntries, setSavedEntries] = useState<ClassScheduleEntry[]>([]);
   const [savedSchedules, setSavedSchedules] = useState<SavedSchedule[]>([]);
@@ -1943,10 +1948,14 @@ export function SchedulerPage() {
   const [feasibilityResult, setFeasibilityResult] = useState<FeasibilityResult | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isUpdatingData, setIsUpdatingData] = useState(false);
   const [generationEndsAt, setGenerationEndsAt] = useState<number | null>(null);
   const [countdownTick, setCountdownTick] = useState(0);
   const [draggedScheduleId, setDraggedScheduleId] = useState<string | null>(null);
   const [draggedConflictAssignmentId, setDraggedConflictAssignmentId] = useState<string | null>(null);
+  const [draggedCustomLoad, setDraggedCustomLoad] = useState<DraggedCustomLoad | null>(null);
+  const [editingRoomScheduleId, setEditingRoomScheduleId] = useState<string | null>(null);
+  const [roomDraft, setRoomDraft] = useState("");
   const [lockMessage, setLockMessage] = useState("");
   const [pendingLocalDraft, setPendingLocalDraft] = useState<LocalScheduleDraft | null>(null);
   const [cloudScheduleLoadedAt, setCloudScheduleLoadedAt] = useState(0);
@@ -1954,7 +1963,14 @@ export function SchedulerPage() {
   const [autoPlotMode, setAutoPlotMode] = useState<AutoPlotMode>("empty");
   const [autoPlotScope, setAutoPlotScope] = useState<AutoPlotScope>("selected");
   const [preserveExistingSchedule, setPreserveExistingSchedule] = useState(true);
-  const [ignoreSameSubjectTeacherDayOnDrag, setIgnoreSameSubjectTeacherDayOnDrag] = useState(false);
+  const [showCustomTaskPanel, setShowCustomTaskPanel] = useState(false);
+  const [customForm, setCustomForm] = useState<CustomScheduleForm>({
+    sectionId: "",
+    teacherId: "",
+    title: "Homeroom Guidance",
+    hours: "1",
+    room: "",
+  });
   const [showResetConfirmation, setShowResetConfirmation] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -1968,8 +1984,16 @@ export function SchedulerPage() {
   useEffect(() => subscribeTeachers(setTeachers), []);
   useEffect(() => subscribeSubjects(setSubjects), []);
   useEffect(() => subscribeSections(setSections), []);
+  useEffect(() => subscribeCurriculumMappings(setCurriculumMappings), []);
   useEffect(() => subscribeAncillaryLoads(setAncillaryLoads), []);
-  useEffect(() => subscribeSchedulePrintSettings(setSchedulePrintSettings), []);
+  useEffect(
+    () =>
+      subscribeSchedulePrintSettings((settings) => {
+        setSchedulePrintSettings(settings);
+        setActiveScheduleTimeSlots(settings);
+      }),
+    [],
+  );
   useEffect(
     () => subscribeLoadAssignmentsByPeriod(schoolYear, term, setAssignments),
     [schoolYear, term],
@@ -2010,6 +2034,8 @@ export function SchedulerPage() {
     setPlacementLog([]);
     setFeasibilityResult(null);
     setGenerationEndsAt(null);
+    setEditingRoomScheduleId(null);
+    setRoomDraft("");
     setSelectedTeacherId("");
     setSelectedSavedScheduleId("");
     setScheduleName("");
@@ -2067,6 +2093,13 @@ export function SchedulerPage() {
     () => new Map(teachers.map((teacher) => [teacher.teacherId, teacher])),
     [teachers],
   );
+  const activeTeachers = useMemo(
+    () =>
+      teachers
+        .filter((teacher) => teacher.status === "active")
+        .sort((first, second) => first.fullName.localeCompare(second.fullName)),
+    [teachers],
+  );
 
   const gradeOptions = useMemo(() => {
     const options = new Set(["all", "11", "12"]);
@@ -2098,6 +2131,10 @@ export function SchedulerPage() {
   );
 
   const visibleEntries = draftEntries.length > 0 ? draftEntries : savedEntries;
+  const unlockedScheduleCount = useMemo(
+    () => visibleEntries.filter((entry) => !entry.locked).length,
+    [visibleEntries],
+  );
   const selectedSavedSchedule = useMemo(
     () =>
       savedSchedules.find(
@@ -2116,9 +2153,42 @@ export function SchedulerPage() {
         .sort((first, second) => first.sectionName.localeCompare(second.sectionName)),
     [joinedAssignments, scopedAdvisingSectionId],
   );
+
+  useEffect(() => {
+    if (visibleSections.length === 0) return;
+
+    setCustomForm((current) => {
+      if (current.sectionId === noSectionFormValue) return current;
+      const section = visibleSections.some((item) => item.sectionId === current.sectionId)
+        ? sectionsById.get(current.sectionId) ?? visibleSections[0]
+        : visibleSections[0];
+      if (!section) return current;
+
+      return {
+        ...current,
+        sectionId: section.sectionId,
+        room: current.room || section.room || "",
+      };
+    });
+  }, [sectionsById, visibleSections]);
+  useEffect(() => {
+    if (activeTeachers.length === 0) return;
+
+    setCustomForm((current) => ({
+      ...current,
+      teacherId: activeTeachers.some((teacher) => teacher.teacherId === current.teacherId)
+        ? current.teacherId
+        : activeTeachers[0].teacherId,
+    }));
+  }, [activeTeachers]);
+
   const selectedSection = useMemo(
     () => visibleSections.find((section) => section.sectionId === selectedSectionId) ?? visibleSections[0],
     [selectedSectionId, visibleSections],
+  );
+  const customFormSection = useMemo(
+    () => (customForm.sectionId && customForm.sectionId !== noSectionFormValue ? sectionsById.get(customForm.sectionId) : undefined),
+    [customForm.sectionId, sectionsById],
   );
   const visibleTeachers = useMemo(
     () => {
@@ -2138,6 +2208,17 @@ export function SchedulerPage() {
         );
     },
     [joinedAssignments, scopedTeacherId, teachersById, visibleEntries],
+  );
+  const customLoadEntries = useMemo(
+    () =>
+      visibleEntries
+        .filter(isCustomScheduleEntry)
+        .sort((first, second) => {
+          const firstSection = getEntrySectionLabel(first, sectionsById);
+          const secondSection = getEntrySectionLabel(second, sectionsById);
+          return firstSection.localeCompare(secondSection) || getEntryTitle(first, subjectsById).localeCompare(getEntryTitle(second, subjectsById));
+        }),
+    [sectionsById, subjectsById, visibleEntries],
   );
 
   useEffect(() => {
@@ -2186,6 +2267,13 @@ export function SchedulerPage() {
     () => visibleTeachers.find((teacher) => teacher.teacherId === selectedTeacherId) ?? teacherPlotSummaries[0]?.teacher,
     [selectedTeacherId, teacherPlotSummaries, visibleTeachers],
   );
+  const selectedTeacherCustomLoads = useMemo(
+    () =>
+      selectedTeacher
+        ? customLoadEntries.filter((entry) => entry.teacherId === selectedTeacher.teacherId)
+        : [],
+    [customLoadEntries, selectedTeacher],
+  );
   const selectedTeacherAssignments = useMemo(
     () =>
       selectedTeacher
@@ -2216,6 +2304,51 @@ export function SchedulerPage() {
     [gradeLevel, sections],
   );
 
+  async function handleUpdateScheduleData() {
+    if (isGenerating || isUpdatingData) return;
+
+    setIsUpdatingData(true);
+    setSaveMessage("Updating scheduler data...");
+    setGenerationMessage("");
+    setLockMessage("");
+
+    try {
+      setActiveScheduleTimeSlots(schedulePrintSettings);
+      const periodMappings = curriculumMappings.filter(
+        (mapping) => mapping.schoolYear === schoolYear && mapping.term === term,
+      );
+      let syncMessage = "Live scheduler data refreshed.";
+
+      if (canEdit) {
+        const result = await syncLoadAssignmentsForPeriod({
+          assignments,
+          mappings: curriculumMappings,
+          schoolYear,
+          sections,
+          subjects,
+          term,
+        });
+        const details = [
+          `${result.updated} load assignment${result.updated === 1 ? "" : "s"} updated`,
+          `${result.removed} removed`,
+          result.skipped > 0 ? `${result.skipped} skipped` : "",
+        ].filter(Boolean);
+        syncMessage = `Load assignments synced: ${details.join(", ")}.`;
+      }
+
+      setFeasibilityResult(null);
+      setSaveMessage("Scheduler data updated.");
+      setLockMessage(
+        `${syncMessage} Current records: ${subjects.length} subjects, ${sections.length} sections, ${teachers.length} teachers, ${assignments.length} load assignments, ${periodMappings.length} curriculum mappings.`,
+      );
+    } catch (error) {
+      console.error(error);
+      setSaveMessage("Scheduler data update failed. Check your connection and try again.");
+    } finally {
+      setIsUpdatingData(false);
+    }
+  }
+
   function feasibilityErrorsToConflicts(errors: string[]): Conflict[] {
     return errors.map((error, index) => ({
       assignmentId: `feasibility-${index}`,
@@ -2233,8 +2366,8 @@ export function SchedulerPage() {
     setFeasibilityResult(result);
     setGenerationMessage(
       result.canGenerate
-        ? "Feasibility check passed. You can generate the schedule."
-        : "Feasibility check found hard errors. Please review before generating.",
+        ? "Feasibility check passed. No hard scheduling conflicts found."
+        : "Feasibility check found hard errors. Please review them before plotting.",
     );
     setConflicts(result.canGenerate ? [] : feasibilityErrorsToConflicts(result.errors));
   }
@@ -2256,7 +2389,7 @@ export function SchedulerPage() {
   function getScheduleAuditConflicts(entries: ClassScheduleEntry[]) {
     const assignmentsById = new Map(joinedAssignments.map((assignment) => [assignment.assignmentId, assignment]));
     const staleEntryConflicts = entries
-      .filter((entry) => !assignmentsById.has(entry.sourceAssignmentId))
+      .filter((entry) => !isCustomScheduleEntry(entry) && !assignmentsById.has(entry.sourceAssignmentId))
       .map((entry, index): Conflict => ({
         assignmentId: `${entry.sourceAssignmentId || entry.scheduleId}-stale-${index}`,
         type: "conflict",
@@ -2538,7 +2671,7 @@ export function SchedulerPage() {
       return;
     }
     if (visibleEntries.length === 0) {
-      setSaveMessage("Generate or load a schedule before saving a named copy.");
+      setSaveMessage("Load or plot a schedule before saving a named copy.");
       return;
     }
 
@@ -2616,6 +2749,68 @@ export function SchedulerPage() {
     setGenerationEndsAt(null);
     setPendingLocalDraft(null);
     removeLocalScheduleDraft(draftStorageKey);
+  }
+
+  async function handleClearUnlockedSchedule() {
+    if (!canEdit || isGenerating || isSaving) return;
+
+    const unlockedEntries = visibleEntries.filter((entry) => !entry.locked);
+    if (unlockedEntries.length === 0) {
+      setLockMessage("No unlocked schedule entries to clear.");
+      return;
+    }
+
+    const shouldClear = window.confirm(
+      `Clear ${unlockedEntries.length} unlocked schedule entr${unlockedEntries.length === 1 ? "y" : "ies"}? Locked entries will stay in place.`,
+    );
+    if (!shouldClear) return;
+
+    const lockedEntries = visibleEntries
+      .filter((entry) => entry.locked)
+      .map(cleanEntryForLocalDraft);
+    const nextConflicts = getScheduleAuditConflicts(lockedEntries);
+    const missingSessionCount = nextConflicts
+      .filter((conflict) => conflict.type === "unscheduled" || conflict.type === "special")
+      .reduce((sum, conflict) => sum + conflict.sessions, 0);
+    const completion = getCompletionStats(
+      lockedEntries.filter((entry) =>
+        joinedAssignments.some((assignment) => assignment.assignmentId === entry.sourceAssignmentId),
+      ),
+      missingSessionCount,
+      [],
+    );
+
+    setIsSaving(true);
+    setSaveMessage("Clearing unlocked schedule entries...");
+
+    try {
+      latestSaveRunRef.current += 1;
+      await saveQueueRef.current.catch(() => undefined);
+      await replaceSchedulesByPeriod(schoolYear, term, gradeLevel, strandFilter, lockedEntries);
+      setDraftEntries([]);
+      setSavedEntries(lockedEntries);
+      setConflicts(nextConflicts);
+      setRecentlyChangedScheduleIds(new Set(lockedEntries.map((entry) => entry.scheduleId)));
+      setPlacementLog([]);
+      setGenerationProgress(null);
+      setOptimizationScore(null);
+      setCompletionPercent(completion.completionPercent);
+      setGenerationEndsAt(null);
+      setPendingLocalDraft(null);
+      removeLocalScheduleDraft(draftStorageKey);
+      setGenerationMessage(
+        nextConflicts.some((conflict) => conflict.type !== "score")
+          ? "Unlocked entries cleared. Removed subjects are now listed for review."
+          : "Unlocked entries cleared. Only locked entries remain.",
+      );
+      setLockMessage(`Cleared ${unlockedEntries.length} unlocked schedule entr${unlockedEntries.length === 1 ? "y" : "ies"}.`);
+      setSaveMessage("Unlocked schedule entries cleared.");
+    } catch (error) {
+      console.error(error);
+      setSaveMessage("Failed to clear unlocked schedule entries. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function handleAbsoluteResetSchedule() {
@@ -2759,6 +2954,83 @@ export function SchedulerPage() {
     );
   }
 
+  function startEditRoom(entry: ClassScheduleEntry) {
+    if (!canEdit || isGenerating) return;
+    setEditingRoomScheduleId(entry.scheduleId);
+    setRoomDraft(entry.room ?? "");
+    setLockMessage("");
+  }
+
+  function cancelEditRoom() {
+    setEditingRoomScheduleId(null);
+    setRoomDraft("");
+  }
+
+  async function saveEditedRoom(entry: ClassScheduleEntry) {
+    if (!canEdit || isGenerating) return;
+
+    const nextRoom = roomDraft.trim();
+    const nextEntry: ClassScheduleEntry = {
+      ...entry,
+      room: nextRoom || undefined,
+    };
+    const hadDraft = draftEntries.length > 0;
+    const otherEntries = visibleEntries.filter((item) => item.scheduleId !== entry.scheduleId);
+    const hasNextRoomConflict =
+      Boolean(nextRoom) &&
+      !isCustomScheduleEntry(nextEntry) &&
+      otherEntries.some(
+        (item) =>
+          item.room === nextRoom &&
+          !isCustomScheduleEntry(item) &&
+          entriesOverlap(item, nextEntry),
+      );
+
+    if (hasNextRoomConflict) {
+      setLockMessage(`Room ${nextRoom} is already in use during this time block.`);
+      return;
+    }
+
+    const updatedEntries = visibleEntries.map((item) =>
+      item.scheduleId === entry.scheduleId ? nextEntry : item,
+    );
+
+    setDraftEntries(updatedEntries);
+    setSavedEntries(updatedEntries);
+
+    setEditingRoomScheduleId(null);
+    setRoomDraft("");
+    setRecentlyChangedScheduleIds(new Set([entry.scheduleId]));
+    setLockMessage(nextRoom ? `Room updated to ${nextRoom}.` : "Room assignment cleared.");
+    saveLocalDraft({ entries: updatedEntries, saveStatus: "Room assignment saved locally" });
+
+    if (isCustomScheduleEntry(nextEntry)) {
+      void autoSaveSchedule(updatedEntries, "Room assignment auto-saved.");
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveMessage("Saving room to cloud...");
+    try {
+      await saveScheduleEntry(cleanEntryForLocalDraft(nextEntry));
+      if (!hadDraft) {
+        setDraftEntries([]);
+        removeLocalScheduleDraft(draftStorageKey);
+        setPendingLocalDraft(null);
+      }
+      setSaveMessage("Room assignment saved to cloud");
+    } catch (error) {
+      console.error(error);
+      saveLocalDraft({
+        entries: updatedEntries,
+        saveStatus: "Room cloud save failed, local draft preserved",
+      });
+      setSaveMessage("Room cloud save failed, local draft preserved");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   function handleRemoveEntry(entry: ClassScheduleEntry) {
     if (!canEdit || isGenerating) return;
 
@@ -2804,14 +3076,137 @@ export function SchedulerPage() {
     setPlacementLog((current) => current.filter((item) => item.scheduleId !== entry.scheduleId));
     setCompletionPercent(null);
     setOptimizationScore(null);
-    setLockMessage("Schedule entry removed. It is now listed as unplaced.");
+    setLockMessage(
+      isCustomScheduleEntry(entry)
+        ? "Custom schedule card removed."
+        : "Schedule entry removed. It is now listed as unplaced.",
+    );
     void autoSaveSchedule(updatedEntries, "Schedule removal auto-saved. You can continue fixing it later.", {
       nextConflicts,
-      nextGenerationMessage: "Some subjects could not be scheduled. Review conflicts.",
+      nextGenerationMessage: isCustomScheduleEntry(entry)
+        ? generationMessage
+        : "Some subjects could not be scheduled. Review conflicts.",
       nextOptimizationScore: null,
       nextCompletionPercent: null,
       nextGenerationProgress: null,
     });
+  }
+
+  function handleAddCustomScheduleCard() {
+    if (!canEdit || isGenerating) return;
+
+    const title = customForm.title.trim();
+    if (!title) {
+      setLockMessage("Enter a title for the custom schedule card.");
+      return;
+    }
+
+    if (!customForm.teacherId) {
+      setLockMessage("Choose a teacher for the custom load.");
+      return;
+    }
+
+    const hours = Number(customForm.hours);
+    if (!Number.isFinite(hours) || hours <= 0) {
+      setLockMessage("Enter a valid number of hours for the custom load.");
+      return;
+    }
+
+    const isTeacherOnly = customForm.sectionId === noSectionFormValue;
+    const templateSection = customFormSection ?? selectedSection ?? visibleSections[0];
+    if (!templateSection) {
+      setLockMessage("Choose a section template before adding a custom load.");
+      return;
+    }
+
+    const room = customForm.room.trim() || (isTeacherOnly ? "" : templateSection.room?.trim());
+    const customSectionId = isTeacherOnly ? "" : templateSection.sectionId;
+    const customId = `custom:${customSectionId || "no-section"}:${customForm.teacherId}:${title}:${Date.now()}`;
+    const customEntry: ClassScheduleEntry = {
+      scheduleId: customId.replace(/[^a-zA-Z0-9]/g, "_"),
+      schoolYear,
+      term,
+      gradeLevel: templateSection.gradeLevel,
+      strand: templateSection.strand,
+      sectionId: customSectionId,
+      subjectId: title,
+      teacherId: customForm.teacherId,
+      room: room || undefined,
+      day: "Monday",
+      startTime: "",
+      endTime: "",
+      duration: hours,
+      slotId: customId,
+      sourceAssignmentId: customId,
+      locked: true,
+      custom: true,
+      customTitle: title,
+      customDetails: isTeacherOnly ? noSectionLabel : "",
+      templateType: getTemplateType(templateSection, templateSection.gradeLevel),
+    };
+
+    const updatedEntries = [...visibleEntries, customEntry];
+    setDraftEntries(updatedEntries);
+    setSavedEntries(updatedEntries);
+    setRecentlyChangedScheduleIds(new Set([customEntry.scheduleId]));
+    setPlacementLog((current) => [customEntry, ...current].slice(0, 12));
+    setLockMessage(`Added ${title}.`);
+    setCustomForm((current) => ({ ...current, title: "", hours: "1" }));
+    void autoSaveSchedule(updatedEntries, "Custom schedule card auto-saved.", {
+      nextGenerationMessage: generationMessage,
+      nextOptimizationScore: optimizationScore,
+      nextCompletionPercent: completionPercent,
+      nextGenerationProgress: generationProgress,
+    });
+  }
+
+  function buildCustomScheduleEntry(
+    title: string,
+    duration: number,
+    templateSection: Section,
+    teacherId: string,
+    day: ScheduleDay,
+    slot: Slot,
+    options: { teacherOnly?: boolean; room?: string; customDetails?: string } = {},
+  ): ClassScheduleEntry {
+    const sectionId = options.teacherOnly ? "" : templateSection.sectionId;
+    const customId = `custom:${sectionId || "no-section"}:${teacherId}:${title}:${Date.now()}`;
+    const room = options.room?.trim() || (options.teacherOnly ? "" : templateSection.room?.trim());
+
+    return {
+      scheduleId: customId.replace(/[^a-zA-Z0-9]/g, "_"),
+      schoolYear,
+      term,
+      gradeLevel: templateSection.gradeLevel,
+      strand: templateSection.strand,
+      sectionId,
+      subjectId: title,
+      teacherId,
+      room: room || undefined,
+      day,
+      startTime: slot.startTime,
+      endTime: getEndTimeForDuration(slot.startTime, duration),
+      duration,
+      slotId: slot.slotId,
+      sourceAssignmentId: customId,
+      locked: true,
+      custom: true,
+      customTitle: title,
+      customDetails: options.customDetails ?? "Special Task",
+      templateType: getTemplateType(templateSection, templateSection.gradeLevel),
+    };
+  }
+
+  function getCustomDropTemplateSection(entityField: "sectionId" | "teacherId", entityId: string) {
+    return entityField === "sectionId"
+      ? sectionsById.get(entityId)
+      : selectedSection;
+  }
+
+  function getCustomDropTeacherId(entityField: "sectionId" | "teacherId", entityId: string) {
+    return entityField === "teacherId"
+      ? entityId
+      : selectedTeacher?.teacherId;
   }
 
   function entryMatchesCell(entry: ClassScheduleEntry, entityField: "sectionId" | "teacherId", slot: Slot) {
@@ -2843,8 +3238,7 @@ export function SchedulerPage() {
       ...entry,
       day,
       startTime: slot.startTime,
-      endTime: slot.endTime,
-      duration: slot.duration,
+      endTime: getEndTimeForDuration(slot.startTime, entry.duration),
       slotId: slot.slotId,
     };
   }
@@ -2865,12 +3259,20 @@ export function SchedulerPage() {
     options: { allowShorterDuration?: boolean } = {},
   ) {
     const section = sectionsById.get(entry.sectionId);
-    return getSlotsForSection(section, entry.gradeLevel).some(
-      (gradeSlot) =>
-        gradeSlot.slotId === slot.slotId &&
-        (options.allowShorterDuration
-          ? entry.duration <= gradeSlot.duration && entry.duration <= slot.duration
-          : gradeSlot.duration === entry.duration),
+    const compatibleSlots = section ? getSlotsForSection(section, entry.gradeLevel) : getSlotsForEntryTemplate(entry);
+
+    return compatibleSlots.some(
+      (gradeSlot) => {
+        const sameSlot = gradeSlot.slotId === slot.slotId;
+        const sameTime = gradeSlot.startTime === slot.startTime && gradeSlot.endTime === slot.endTime;
+
+        return (
+          (sameSlot || sameTime) &&
+          (options.allowShorterDuration
+            ? entry.duration <= gradeSlot.duration && entry.duration <= slot.duration
+            : canSlotFitDuration(gradeSlot, entry.duration) && canSlotFitDuration(slot, entry.duration))
+        );
+      },
     );
   }
 
@@ -2895,11 +3297,8 @@ export function SchedulerPage() {
         sessionIndex: getNextSessionIndex(assignment.assignmentId),
         totalSessions: rule.sessions,
         priority: rule.priority,
-        units: Number(assignment.units || assignment.subject.units || 0),
-        preferElectiveSlot:
-          normalizeGrade(assignment.gradeLevel) === "11" &&
-          (Number(assignment.units || assignment.subject.units || 0) === 8 ||
-            Number(assignment.units || assignment.subject.units || 0) === 12.5),
+        units: getJoinedAssignmentUnits(assignment),
+        preferElectiveSlot: prefersGrade11AfternoonSlot(assignment),
       },
       day,
       slot,
@@ -2916,6 +3315,7 @@ export function SchedulerPage() {
   function clearDragState() {
     setDraggedScheduleId(null);
     setDraggedConflictAssignmentId(null);
+    setDraggedCustomLoad(null);
   }
 
   function getConflictsAfterPlaced(currentConflicts: Conflict[], assignmentId: string) {
@@ -2930,12 +3330,84 @@ export function SchedulerPage() {
       });
   }
 
-  function handleDropOnCell(targetEntry: ClassScheduleEntry | undefined, day: ScheduleDay, slot: Slot) {
-    if ((!draggedScheduleId && !draggedConflictAssignmentId) || isGenerating) return;
+  function handleDropOnCell(
+    targetEntry: ClassScheduleEntry | undefined,
+    day: ScheduleDay,
+    slot: Slot,
+    entityField: "sectionId" | "teacherId",
+    entityId: string,
+  ) {
+    if ((!draggedScheduleId && !draggedConflictAssignmentId && !draggedCustomLoad) || isGenerating) return;
 
-    const dragConflictOptions = {
-      allowSameSubjectTeacherSectionDay: ignoreSameSubjectTeacherDayOnDrag,
-    };
+    if (draggedCustomLoad) {
+      const sourceEntry =
+        draggedCustomLoad.type === "existing"
+          ? visibleEntries.find((entry) => entry.scheduleId === draggedCustomLoad.scheduleId)
+          : undefined;
+      const isActivityDrop = draggedCustomLoad.type === "activity";
+      if (isActivityDrop && entityField !== "sectionId") {
+        setLockMessage("This activity card is for class schedules only. Switch to Class Schedule and drop it on a section slot.");
+        clearDragState();
+        return;
+      }
+
+      const templateSection = sourceEntry
+        ? sectionsById.get(sourceEntry.sectionId)
+          ?? selectedSection
+          ?? visibleSections[0]
+        : getCustomDropTemplateSection(entityField, entityId);
+      const teacherId = isActivityDrop ? "" : sourceEntry?.teacherId || getCustomDropTeacherId(entityField, entityId);
+
+      if (!templateSection || (!isActivityDrop && !teacherId)) {
+        setLockMessage(isActivityDrop ? "Choose a class section before placing this activity." : "Choose a section and teacher before placing this custom load.");
+        clearDragState();
+        return;
+      }
+
+      const customEntry = sourceEntry
+        ? {
+            ...moveEntryToManualSlot(sourceEntry, day, slot),
+            endTime: getEndTimeForDuration(slot.startTime, sourceEntry.duration),
+            locked: true,
+          }
+        : buildCustomScheduleEntry(unlimitedActivityTitle, 1, templateSection, teacherId, day, slot, {
+            customDetails: "Class Activity",
+          });
+
+      if (!canEntryUseSlot(customEntry, slot, { allowShorterDuration: true })) {
+        setLockMessage("Custom placement blocked because the target time slot is shorter than the task duration or outside the grade template.");
+        clearDragState();
+        return;
+      }
+
+      const comparisonEntries = sourceEntry
+        ? visibleEntries.filter((entry) => entry.scheduleId !== sourceEntry.scheduleId)
+        : visibleEntries;
+      const conflictReason = getHardConflictReason(customEntry, comparisonEntries);
+      if (conflictReason) {
+        setLockMessage(conflictReason);
+        clearDragState();
+        return;
+      }
+
+      const updatedEntries = sourceEntry
+        ? visibleEntries.map((entry) => (entry.scheduleId === sourceEntry.scheduleId ? customEntry : entry))
+        : [...visibleEntries, customEntry];
+
+      setDraftEntries(updatedEntries);
+      setSavedEntries(updatedEntries);
+      setRecentlyChangedScheduleIds(new Set([customEntry.scheduleId]));
+      setPlacementLog((current) => [customEntry, ...current.filter((item) => item.scheduleId !== customEntry.scheduleId)].slice(0, 12));
+      setLockMessage(`Placed ${getEntryTitle(customEntry, subjectsById)}.`);
+      void autoSaveSchedule(updatedEntries, "Custom schedule placement auto-saved.", {
+        nextGenerationMessage: generationMessage,
+        nextOptimizationScore: optimizationScore,
+        nextCompletionPercent: completionPercent,
+        nextGenerationProgress: generationProgress,
+      });
+      clearDragState();
+      return;
+    }
 
     if (draggedConflictAssignmentId) {
       const assignment = joinedAssignments.find((item) => item.assignmentId === draggedConflictAssignmentId);
@@ -2951,7 +3423,7 @@ export function SchedulerPage() {
         return;
       }
 
-      const manualConflictReason = getHardConflictReason(manualEntry, visibleEntries, dragConflictOptions);
+      const manualConflictReason = getHardConflictReason(manualEntry, visibleEntries);
       if (manualConflictReason) {
         setLockMessage(manualConflictReason);
         clearDragState();
@@ -3011,10 +3483,9 @@ export function SchedulerPage() {
       getHardConflictReason(
         movedSource,
         [...otherEntries, ...(movedTarget ? [movedTarget] : [])],
-        dragConflictOptions,
       ) ||
       (movedTarget
-        ? getHardConflictReason(movedTarget, [...otherEntries, movedSource], dragConflictOptions)
+        ? getHardConflictReason(movedTarget, [...otherEntries, movedSource])
         : "");
 
     if (moveConflictReason) {
@@ -3201,7 +3672,11 @@ export function SchedulerPage() {
         viewMode === "teacher"
           ? assignments
               .filter((assignment) => assignment.teacherId === entityId)
-              .reduce((sum, assignment) => sum + Number(assignment.units || 0), 0)
+              .reduce(
+                (sum, assignment) =>
+                  sum + Number(subjectsById.get(assignment.subjectId)?.units ?? assignment.units ?? 0),
+                0,
+              )
           : 0;
       const teacherTotalAncillaryLoad =
         viewMode === "teacher"
@@ -3216,8 +3691,8 @@ export function SchedulerPage() {
       const entitySlots =
         viewMode === "section"
           ? getSlotsForSection(entity as Section, (entity as Section).gradeLevel)
-          : allDisplaySlots;
-      const entityBreaks = viewMode === "section" ? getBreaks((entity as Section).gradeLevel) : [];
+          : getAllDisplaySlots();
+      const entityBreaks = viewMode === "section" ? getBreaksForSection(entity as Section, (entity as Section).gradeLevel) : [];
       const entityMeta =
         viewMode === "section"
           ? [
@@ -3256,16 +3731,22 @@ export function SchedulerPage() {
           const cells = days
             .map((day, index) => {
               const entry = rowEntries[index];
-              const subject = entry ? subjectsById.get(entry.subjectId) : undefined;
               const section = entry ? sectionsById.get(entry.sectionId) : undefined;
               const teacher = entry ? teachersById.get(entry.teacherId) : undefined;
-              const secondary = viewMode === "section" ? teacher?.fullName : section?.sectionName;
+              const isCustomEntry = entry ? isCustomScheduleEntry(entry) : false;
+              const secondary = isCustomEntry
+                ? entry?.customDetails
+                : viewMode === "section"
+                  ? teacher?.fullName
+                  : entry
+                    ? getEntrySectionLabel(entry, sectionsById)
+                    : "";
               const details = [
                 secondary,
                 entry?.room ? `Room ${entry.room}` : "",
-                entry ? `${entry.duration} hr${entry.duration === 1 ? "" : "s"}` : "",
+                viewMode === "teacher" && entry ? `${entry.duration} hr${entry.duration === 1 ? "" : "s"}` : "",
               ].filter(Boolean);
-              return `<td>${entry ? `<strong>${escapeHtml(subject?.subjectName ?? entry.subjectId)}</strong>${details.map((detail) => `<span>${escapeHtml(detail)}</span>`).join("")}` : ""}</td>`;
+              return `<td>${entry ? `<strong>${escapeHtml(getEntryTitle(entry, subjectsById))}</strong>${details.map((detail) => `<span>${escapeHtml(detail)}</span>`).join("")}` : ""}</td>`;
             })
             .join("");
           return [`<tr><th>${escapeHtml(row.slot.label)}</th>${cells}</tr>`];
@@ -3424,8 +3905,8 @@ export function SchedulerPage() {
     const entitySlots =
       entityField === "sectionId"
         ? getSlotsForSection(entity as Section, (entity as Section).gradeLevel)
-        : allDisplaySlots;
-    const entityBreaks = entityField === "sectionId" ? getBreaks((entity as Section).gradeLevel) : [];
+        : getAllDisplaySlots();
+    const entityBreaks = entityField === "sectionId" ? getBreaksForSection(entity as Section, (entity as Section).gradeLevel) : [];
 
     return (
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm" key={entityId}>
@@ -3474,14 +3955,15 @@ export function SchedulerPage() {
                           onDragOver={(event) => {
                             if (canEdit && !isGenerating) event.preventDefault();
                           }}
-                          onDrop={() => handleDropOnCell(dropTargetEntry, day, slot)}
+                          onDrop={() => handleDropOnCell(dropTargetEntry, day, slot, entityField, entityId)}
                         >
                           {cellEntries.length > 0 ? (
                             <div className="space-y-2">
                               {cellEntries.map((entry) => {
-                                const subject = subjectsById.get(entry.subjectId);
                                 const section = sectionsById.get(entry.sectionId);
                                 const teacher = teachersById.get(entry.teacherId);
+                                const isCustomEntry = isCustomScheduleEntry(entry);
+                                const isEditingRoom = editingRoomScheduleId === entry.scheduleId;
                                 const isRecentlyChanged = recentlyChangedScheduleIds.has(entry.scheduleId);
                                 const overlapWarnings = getOverlapWarnings(entry, visibleEntries, entityField);
 
@@ -3491,26 +3973,44 @@ export function SchedulerPage() {
                                       "rounded-md border p-1.5 transition-all",
                                       overlapWarnings.length > 0
                                         ? "border-red-300 bg-red-50"
-                                        : entry.locked
-                                          ? "border-amber-200 bg-amber-50"
-                                          : "border-blue-100 bg-blue-50",
-                                      canEdit && !entry.locked && !isGenerating ? "cursor-grab active:cursor-grabbing" : "",
+                                        : isCustomEntry
+                                          ? "border-emerald-200 bg-emerald-50"
+                                          : entry.locked
+                                            ? "border-amber-200 bg-amber-50"
+                                            : "border-blue-100 bg-blue-50",
+                                      canEdit && !entry.locked && !isGenerating && !isEditingRoom ? "cursor-grab active:cursor-grabbing" : "",
                                       draggedScheduleId === entry.scheduleId ? "opacity-50" : "",
                                       isRecentlyChanged ? "animate-pulse ring-2 ring-blue-400 ring-offset-1" : "",
                                     ].join(" ")}
-                                    draggable={canEdit && !entry.locked && !isGenerating}
+                                    draggable={canEdit && !entry.locked && !isGenerating && !isEditingRoom}
                                     key={entry.scheduleId}
                                     onDragEnd={clearDragState}
                                     onDragStart={(event) => {
                                       setDraggedScheduleId(entry.scheduleId);
                                       setDraggedConflictAssignmentId(null);
+                                      setDraggedCustomLoad(null);
                                       event.dataTransfer.effectAllowed = "move";
                                     }}
                                   >
                                     <div className="flex items-start justify-between gap-2">
-                                      <p className="font-semibold text-slate-950">{subject?.subjectName ?? entry.subjectId}</p>
+                                      <div>
+                                        {isCustomEntry && (
+                                          <p className="text-[10px] font-bold uppercase text-emerald-700">{getCustomEntryLabel(entry)}</p>
+                                        )}
+                                        <p className="font-semibold text-slate-950">{getEntryTitle(entry, subjectsById)}</p>
+                                      </div>
                                       {canEdit && (
                                         <div className="flex shrink-0 gap-1">
+                                          <button
+                                            aria-label="Edit room assignment"
+                                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                                            disabled={isGenerating}
+                                            onClick={() => startEditRoom(entry)}
+                                            title="Edit room"
+                                            type="button"
+                                          >
+                                            <Pencil size={14} />
+                                          </button>
                                           <button
                                             aria-label={entry.locked ? "Unlock schedule entry" : "Lock schedule entry"}
                                             className={entry.locked ? "inline-flex h-7 w-7 items-center justify-center rounded-md border border-amber-300 bg-white text-amber-700 hover:bg-amber-100" : "inline-flex h-7 w-7 items-center justify-center rounded-md border border-blue-200 bg-white text-blue-700 hover:bg-blue-100"}
@@ -3534,10 +4034,46 @@ export function SchedulerPage() {
                                       )}
                                     </div>
                                     <p className="text-slate-600">
-                                      {entityField === "sectionId" ? teacher?.fullName : section?.sectionName}
+                                      {isCustomEntry
+                                        ? `${entry.duration} hr${entry.duration === 1 ? "" : "s"}`
+                                        : entityField === "sectionId"
+                                          ? teacher?.fullName
+                                          : section?.sectionName}
                                     </p>
-                                    <p className="text-slate-500">{entry.startTime}-{entry.endTime}</p>
-                                    {entry.room && <p className="text-slate-500">Room {entry.room}</p>}
+                                    {!isCustomEntry && <p className="text-slate-500">{entry.startTime}-{entry.endTime}</p>}
+                                    {isEditingRoom ? (
+                                      <div className="mt-2 flex items-center gap-1">
+                                        <input
+                                          aria-label="Room assignment"
+                                          className="h-8 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                                          onChange={(event) => setRoomDraft(event.target.value)}
+                                          onKeyDown={(event) => {
+                                            if (event.key === "Enter") saveEditedRoom(entry);
+                                            if (event.key === "Escape") cancelEditRoom();
+                                          }}
+                                          placeholder="Room"
+                                          value={roomDraft}
+                                        />
+                                        <button
+                                          aria-label="Save room assignment"
+                                          className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-emerald-600 text-white hover:bg-emerald-700"
+                                          onClick={() => saveEditedRoom(entry)}
+                                          type="button"
+                                        >
+                                          <Check size={14} />
+                                        </button>
+                                        <button
+                                          aria-label="Cancel room edit"
+                                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                          onClick={cancelEditRoom}
+                                          type="button"
+                                        >
+                                          <X size={14} />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <p className="text-slate-500">Room {entry.room || "TBA"}</p>
+                                    )}
                                     {entry.locked && <p className="text-[11px] font-semibold uppercase text-amber-700">Locked</p>}
                                     {overlapWarnings.map((warning) => (
                                       <p className="mt-1 text-[11px] font-semibold text-red-700" key={warning}>{warning}</p>
@@ -3574,39 +4110,18 @@ export function SchedulerPage() {
       <PageHeader
         actions={
           <div className="flex flex-wrap gap-2">
-            <select
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700"
-              onChange={(event) => setGenerationMode(event.target.value as GenerationMode)}
-              value={generationMode}
-            >
-              <option value="fast">Fast Draft</option>
-              <option value="best">Best Fit</option>
-            </select>
             <button
-              className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-wait disabled:bg-blue-400"
-              disabled={isGenerating}
-              onClick={() => void handleGenerate()}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+              disabled={isGenerating || isSaving || isUpdatingData}
+              onClick={() => void handleUpdateScheduleData()}
               type="button"
             >
-              {isGenerating ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-              ) : (
-                <CalendarDays size={16} />
-              )}
-              {isGenerating ? "Generating..." : visibleEntries.length > 0 ? "Regenerate Schedule" : "Generate Schedule"}
+              <RefreshCw className={isUpdatingData ? "animate-spin" : ""} size={16} />
+              {isUpdatingData ? "Updating..." : "Update Data"}
             </button>
-            {isGenerating && generationMode === "best" && (
-              <button
-                className="inline-flex h-10 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100"
-                onClick={handleStopGeneration}
-                type="button"
-              >
-                Stop and Keep Best Result
-              </button>
-            )}
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md border border-blue-200 bg-white px-3 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-              disabled={isGenerating}
+              disabled={isGenerating || isUpdatingData}
               onClick={handleCheckFeasibility}
               type="button"
             >
@@ -3614,27 +4129,35 @@ export function SchedulerPage() {
             </button>
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-              disabled={isGenerating}
+              disabled={isGenerating || isUpdatingData}
               onClick={handleRefreshScheduleConflicts}
               type="button"
             >
               <RefreshCw size={16} /> Refresh Conflicts
             </button>
-            <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100" disabled={isGenerating} onClick={handleClearDraft} type="button">
-              <RotateCcw size={16} /> Clear Draft
-            </button>
             {canEdit && (
-              <button
-                className="inline-flex h-10 items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                disabled={isGenerating || isSaving}
-                onClick={() => {
-                  setShowResetConfirmation(true);
-                  setResetConfirmation("");
-                }}
-                type="button"
-              >
-                Absolute Reset Schedule
-              </button>
+              <>
+                <button
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  disabled={isGenerating || isSaving || unlockedScheduleCount === 0}
+                  onClick={() => void handleClearUnlockedSchedule()}
+                  title="Clear all unlocked entries and keep locked entries"
+                  type="button"
+                >
+                  <Trash2 size={16} /> Clear Unlocked
+                </button>
+                <button
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  disabled={isGenerating || isSaving}
+                  onClick={() => {
+                    setShowResetConfirmation(true);
+                    setResetConfirmation("");
+                  }}
+                  type="button"
+                >
+                  Absolute Reset Schedule
+                </button>
+              </>
             )}
             {pendingLocalDraft && (
               <button
@@ -3654,15 +4177,15 @@ export function SchedulerPage() {
             </button>
           </div>
         }
-        description="Generate, review, and save conflict-free class schedules from existing load assignments."
+        description="Review, manage, and save class schedules from existing load assignments."
         title="Scheduler"
       />
 
       <div className="mb-3 grid gap-2 sm:grid-cols-4">
         <SummaryCard detail={gradeLevel === "all" ? "All grades selected" : `Grade ${gradeLevel} selected`} label="Sections" value={visibleSections.length} />
-        <SummaryCard detail={draftEntries.length > 0 ? "draft generated" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
+        <SummaryCard detail={draftEntries.length > 0 ? "draft active" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
         <SummaryCard detail="needs review" label="Conflicts" value={actionableConflicts.length} />
-        <SummaryCard detail={optimizationScore === null ? "generate to calculate" : `score ${optimizationScore.toLocaleString()}`} label="Done" value={completionPercent === null ? "-" : `${completionPercent}%`} />
+        <SummaryCard detail={optimizationScore === null ? "audit to calculate" : `score ${optimizationScore.toLocaleString()}`} label="Done" value={completionPercent === null ? "-" : `${completionPercent}%`} />
       </div>
 
       <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
@@ -3698,16 +4221,6 @@ export function SchedulerPage() {
             </div>
           </label>
         </div>
-        <label className="mt-2 inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
-          <input
-            checked={ignoreSameSubjectTeacherDayOnDrag}
-            className="h-4 w-4 rounded border-slate-300"
-            disabled={isGenerating}
-            onChange={(event) => setIgnoreSameSubjectTeacherDayOnDrag(event.target.checked)}
-            type="checkbox"
-          />
-          Ignore same subject, teacher, and day rule while dragging
-        </label>
         <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)_auto_auto]">
           <label className="text-xs font-semibold uppercase text-slate-500">
             Schedule Name
@@ -3760,6 +4273,151 @@ export function SchedulerPage() {
             Delete Selected
           </button>
         </div>
+        {canEdit && (
+          <div className="mt-3 border-t border-slate-200 pt-3">
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={() => setShowCustomTaskPanel((current) => !current)}
+              type="button"
+            >
+              <ChevronDown
+                aria-hidden="true"
+                className={showCustomTaskPanel ? "rotate-180 transition-transform" : "transition-transform"}
+                size={16}
+              />
+              Task/Subject
+            </button>
+            {showCustomTaskPanel && (
+              <>
+                <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(170px,1.1fr)_minmax(170px,1.1fr)_minmax(170px,1.1fr)_minmax(100px,130px)_minmax(140px,0.9fr)_auto]">
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Task/Subject
+                <input
+                  className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
+                  disabled={isGenerating || isSaving || visibleSections.length === 0}
+                  onChange={(event) => setCustomForm((current) => ({ ...current, title: event.target.value }))}
+                  placeholder="Homeroom Guidance"
+                  value={customForm.title}
+                />
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Teacher
+                <select
+                  className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
+                  disabled={isGenerating || isSaving || activeTeachers.length === 0}
+                  onChange={(event) => setCustomForm((current) => ({ ...current, teacherId: event.target.value }))}
+                  value={customForm.teacherId}
+                >
+                  {activeTeachers.map((teacher) => (
+                    <option key={teacher.teacherId} value={teacher.teacherId}>
+                      {teacher.fullName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Section
+                <select
+                  className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
+                  disabled={isGenerating || isSaving || visibleSections.length === 0}
+                  onChange={(event) => {
+                    const section = event.target.value === noSectionFormValue
+                      ? undefined
+                      : sectionsById.get(event.target.value);
+                    setCustomForm((current) => ({
+                      ...current,
+                      sectionId: event.target.value,
+                      room: section ? section.room || current.room : "",
+                    }));
+                  }}
+                  value={customForm.sectionId}
+                >
+                  <option value={noSectionFormValue}>{noSectionLabel}</option>
+                  {visibleSections.map((section) => (
+                    <option key={section.sectionId} value={section.sectionId}>
+                      {section.sectionName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                No. of Hours
+                <input
+                  className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
+                  disabled={isGenerating || isSaving || visibleSections.length === 0}
+                  min="0.25"
+                  onChange={(event) => setCustomForm((current) => ({ ...current, hours: event.target.value }))}
+                  step="0.25"
+                  type="number"
+                  value={customForm.hours}
+                />
+              </label>
+              <label className="text-xs font-semibold uppercase text-slate-500">
+                Room
+                <input
+                  className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
+                  disabled={isGenerating || isSaving || visibleSections.length === 0}
+                  onChange={(event) => setCustomForm((current) => ({ ...current, room: event.target.value }))}
+                  placeholder="Room"
+                  value={customForm.room}
+                />
+              </label>
+              <button
+                className="mt-5 inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                disabled={!customForm.title.trim() || !customForm.teacherId || !Number(customForm.hours) || isGenerating || isSaving || visibleSections.length === 0}
+                onClick={handleAddCustomScheduleCard}
+                type="button"
+              >
+                <Plus size={16} /> Add
+              </button>
+              </div>
+                {customLoadEntries.length > 0 && (
+                  <div className="mt-3 overflow-x-auto rounded-md border border-slate-200">
+                    <table className="w-full min-w-[760px] text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold uppercase">Task/Subject</th>
+                          <th className="px-3 py-2 font-semibold uppercase">Teacher</th>
+                          <th className="px-3 py-2 font-semibold uppercase">Section</th>
+                          <th className="px-3 py-2 font-semibold uppercase">No. of Hours</th>
+                          <th className="px-3 py-2 font-semibold uppercase">Room</th>
+                          <th className="px-3 py-2 font-semibold uppercase">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white text-slate-700">
+                        {customLoadEntries.map((entry) => {
+                          const teacher = teachersById.get(entry.teacherId);
+
+                          return (
+                            <tr key={entry.scheduleId}>
+                              <td className="px-3 py-2 font-semibold text-slate-950">{getEntryTitle(entry, subjectsById)}</td>
+                              <td className="px-3 py-2">{teacher?.fullName ?? entry.teacherId}</td>
+                              <td className="px-3 py-2">{getEntrySectionLabel(entry, sectionsById)}</td>
+                              <td className="px-3 py-2">{entry.duration}</td>
+                              <td className="px-3 py-2">{entry.room || "TBA"}</td>
+                              <td className="px-3 py-2">
+                                <button
+                                  aria-label="Remove custom load"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                                  disabled={isGenerating}
+                                  onClick={() => handleRemoveEntry(entry)}
+                                  title="Remove custom load"
+                                  type="button"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {(generationMessage || saveMessage || lockMessage) && (
           <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm font-medium text-slate-600">
             {isGenerating && (
@@ -3790,9 +4448,9 @@ export function SchedulerPage() {
                     </div>
                     <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
                       {placementLog.map((entry, index) => {
-                        const subject = subjectsById.get(entry.subjectId);
                         const section = sectionsById.get(entry.sectionId);
                         const teacher = teachersById.get(entry.teacherId);
+                        const isCustomEntry = isCustomScheduleEntry(entry);
 
                         return (
                           <div
@@ -3800,13 +4458,17 @@ export function SchedulerPage() {
                             key={`${entry.scheduleId}-${index}`}
                           >
                             <p className="text-sm font-semibold text-slate-950">
-                              {subject?.subjectName ?? entry.subjectId}
+                              {getEntryTitle(entry, subjectsById)}
                             </p>
                             <p className="mt-1 text-xs text-slate-600">
-                              {teacher?.fullName ?? entry.teacherId} - {section?.sectionName ?? entry.sectionId}
+                              {isCustomEntry
+                                ? `${getCustomEntryLabel(entry)} - ${getEntrySectionLabel(entry, sectionsById)}`
+                                : `${teacher?.fullName ?? entry.teacherId} - ${getEntrySectionLabel(entry, sectionsById)}`}
                             </p>
                             <p className="mt-1 text-xs font-semibold text-blue-700">
-                              {entry.day}, {entry.startTime}-{entry.endTime}
+                              {isCustomEntry
+                                ? `${entry.duration} hr${entry.duration === 1 ? "" : "s"}${entry.room ? ` - Room ${entry.room}` : ""}`
+                                : `${entry.day}, ${entry.startTime}-${entry.endTime}`}
                             </p>
                           </div>
                         );
@@ -3873,7 +4535,7 @@ export function SchedulerPage() {
           )}
           {visibleEntries.length === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
-              Generate a schedule for {gradeLevel === "all" ? "all grades" : `Grade ${gradeLevel}`} to populate the timetable.
+              No schedule entries found for {gradeLevel === "all" ? "the selected grades" : `Grade ${gradeLevel}`}.
             </div>
           ) : viewMode === "section" ? (
             <>
@@ -3959,6 +4621,7 @@ export function SchedulerPage() {
                             if (!canDragLoad) return;
                             setDraggedConflictAssignmentId(assignment.assignmentId);
                             setDraggedScheduleId(null);
+                            setDraggedCustomLoad(null);
                             event.dataTransfer.effectAllowed = "move";
                           }}
                           title={canDragLoad ? "Drag to a compatible schedule slot" : undefined}
@@ -3980,9 +4643,85 @@ export function SchedulerPage() {
                         </div>
                       );
                     })}
+                    {selectedTeacherCustomLoads.map((entry) => {
+                      const canDragCustomLoad = canEdit && !isGenerating;
+
+                      return (
+                        <div
+                          className={[
+                            "rounded-md border border-emerald-100 bg-emerald-50 p-1.5 text-xs transition-all",
+                            canDragCustomLoad ? "cursor-grab hover:border-emerald-300 hover:bg-emerald-100 active:cursor-grabbing" : "",
+                            draggedCustomLoad?.type === "existing" && draggedCustomLoad.scheduleId === entry.scheduleId ? "opacity-50" : "",
+                          ].join(" ")}
+                          draggable={canDragCustomLoad}
+                          key={entry.scheduleId}
+                          onDragEnd={clearDragState}
+                          onDragStart={(event) => {
+                            if (!canDragCustomLoad) return;
+                            setDraggedCustomLoad({ type: "existing", scheduleId: entry.scheduleId });
+                            setDraggedConflictAssignmentId(null);
+                            setDraggedScheduleId(null);
+                            event.dataTransfer.effectAllowed = "move";
+                          }}
+                          title={canDragCustomLoad ? "Drag to a compatible schedule slot" : undefined}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase text-emerald-700">{getCustomEntryLabel(entry)}</p>
+                              <p className="font-semibold text-slate-950">{getEntryTitle(entry, subjectsById)}</p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <StatusBadge label={entry.startTime ? "Plotted" : "Unplotted"} tone={entry.startTime ? "green" : "amber"} />
+                              {canDragCustomLoad && <GripVertical aria-hidden="true" className="text-slate-500" size={14} />}
+                            </div>
+                          </div>
+                          <p className="text-slate-600">
+                            {getEntrySectionLabel(entry, sectionsById)} - {entry.duration} hr{entry.duration === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                <p className="mb-1 text-xs font-semibold uppercase text-slate-500">Class Activity</p>
+                {(() => {
+                  const canDragActivity = canEdit && !isGenerating && viewMode === "section" && Boolean(selectedSection);
+
+                  return (
+                    <div
+                      className={[
+                        "rounded-md border border-sky-100 bg-sky-50 p-1.5 text-xs transition-all",
+                        canDragActivity ? "cursor-grab hover:border-sky-300 hover:bg-sky-100 active:cursor-grabbing" : "opacity-70",
+                        draggedCustomLoad?.type === "activity" ? "opacity-50" : "",
+                      ].join(" ")}
+                      draggable={canDragActivity}
+                      onDragEnd={clearDragState}
+                      onDragStart={(event) => {
+                        if (!canDragActivity) return;
+                        setDraggedCustomLoad({ type: "activity" });
+                        setDraggedConflictAssignmentId(null);
+                        setDraggedScheduleId(null);
+                        event.dataTransfer.effectAllowed = "copy";
+                      }}
+                      title={canDragActivity ? "Drag to add a one-hour class activity" : undefined}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase text-sky-700">Unlimited</p>
+                          <p className="font-semibold text-slate-950">{unlimitedActivityTitle}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <StatusBadge label="1 hour" tone="blue" />
+                          {canDragActivity && <GripVertical aria-hidden="true" className="text-slate-500" size={14} />}
+                        </div>
+                      </div>
+                      <p className="text-slate-600">Class schedule only</p>
+                    </div>
+                  );
+                })()}
+              </div>
               <div className="grid gap-2">
                 <label className="text-xs font-semibold uppercase text-slate-500">
                   Auto Plot Mode
@@ -4031,7 +4770,7 @@ export function SchedulerPage() {
               <h2 className="text-base font-semibold text-slate-950">Feasibility Check</h2>
               {feasibilityResult && (
                 <StatusBadge
-                  label={feasibilityResult.canGenerate ? "Can Generate" : "Cannot Generate"}
+                  label={feasibilityResult.canGenerate ? "Ready" : "Blocked"}
                   tone={feasibilityResult.canGenerate ? "green" : "red"}
                 />
               )}
@@ -4124,6 +4863,7 @@ export function SchedulerPage() {
                       if (conflict.type === "score") return;
                       setDraggedConflictAssignmentId(conflict.assignmentId);
                       setDraggedScheduleId(null);
+                      setDraggedCustomLoad(null);
                       event.dataTransfer.effectAllowed = "move";
                     }}
                     title={canEdit && conflict.type !== "score" ? "Drag to an empty schedule slot" : undefined}

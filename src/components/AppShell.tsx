@@ -4,6 +4,7 @@ import {
   BookOpen,
   CalendarDays,
   ClipboardList,
+  FileCheck2,
   GitBranch,
   GraduationCap,
   LayoutDashboard,
@@ -79,6 +80,7 @@ export function AppShell() {
             {canSee("curriculum_mapping") && <SidebarLink icon={GitBranch} label="Curriculum Mapping" onClick={closeSidebar} to="/curriculum-mapping" />}
             {canSee("load_assignment") && <SidebarLink icon={Table2} label="Load Assignment" onClick={closeSidebar} to="/load-assignment" />}
             {canSee("scheduler") && <SidebarLink icon={CalendarDays} label="Scheduler" onClick={closeSidebar} to="/scheduler" />}
+            {canSee("dll_submissions") && <SidebarLink icon={FileCheck2} label="DLL Submissions" onClick={closeSidebar} to="/dll-submissions" />}
             {canSee("teacher_loads") && <SidebarLink icon={Users} label="Teacher Loads" onClick={closeSidebar} to="/teacher-loads" />}
             {canSee("reports") && <SidebarLink icon={BarChart3} label="Reports" onClick={closeSidebar} to="/reports" />}
             {profile?.role === "super_admin" && <SidebarLink icon={Users} label="Users" onClick={closeSidebar} to="/users" />}

@@ -5,17 +5,21 @@ import { PageHeader } from "../components/common/PageHeader";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { subscribeAncillaryLoads } from "../services/ancillaryLoadService";
 import { subscribeLoadAssignments } from "../services/assignmentService";
+import { subscribeClassSchedulesBySchoolYear } from "../services/scheduleService";
 import { subscribeSections } from "../services/sectionService";
 import { subscribeSubjects } from "../services/subjectService";
 import { subscribeTeachers } from "../services/teacherService";
-import type { AcademicTerm, AncillaryLoad, LoadAssignment, Section, Subject, Teacher } from "../types/loading";
-import { defaultSchoolYear, termOptions } from "../types/loading";
+import type { AcademicTerm, AncillaryLoad, ClassScheduleEntry, LoadAssignment, Section, Subject, Teacher } from "../types/loading";
+import { defaultSchoolYear, defaultTerm, termOptions } from "../types/loading";
 import { useAuth } from "../providers/AuthProvider";
 import { getLoadStatus } from "../utils/statusRules";
 
 type TeacherLoadRow = {
   teacher: Teacher;
   termLoads: Record<AcademicTerm, number>;
+  termPrepCounts: Record<AcademicTerm, number>;
+  additionalTasksByTerm: Record<AcademicTerm, string[]>;
+  additionalTaskLoadsByTerm: Record<AcademicTerm, number>;
   prepCount: number;
   teachingLoad: number;
   ancillaryUnits: number;
@@ -58,18 +62,24 @@ export function TeacherLoadsPage() {
   const { profile } = useAuth();
   const scopedTeacherId = profile?.role === "teacher" ? profile.assignedTeacherId : "";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
+  const [summaryTerm, setSummaryTerm] = useState<AcademicTerm>(defaultTerm);
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [assignments, setAssignments] = useState<LoadAssignment[]>([]);
   const [ancillaryLoads, setAncillaryLoads] = useState<AncillaryLoad[]>([]);
+  const [scheduleEntries, setScheduleEntries] = useState<ClassScheduleEntry[]>([]);
 
   useEffect(() => subscribeTeachers(setTeachers), []);
   useEffect(() => subscribeSubjects(setSubjects), []);
   useEffect(() => subscribeSections(setSections), []);
   useEffect(() => subscribeLoadAssignments(setAssignments), []);
   useEffect(() => subscribeAncillaryLoads(setAncillaryLoads), []);
+  useEffect(
+    () => subscribeClassSchedulesBySchoolYear(schoolYear, setScheduleEntries),
+    [schoolYear],
+  );
 
   const subjectsById = useMemo(
     () => new Map(subjects.map((subject) => [subject.subjectId, subject])),
@@ -80,6 +90,29 @@ export function TeacherLoadsPage() {
     () => new Map(sections.map((section) => [section.sectionId, section])),
     [sections],
   );
+
+  function getAssignmentUnits(assignment: LoadAssignment) {
+    return Number(subjectsById.get(assignment.subjectId)?.units ?? assignment.units ?? 0);
+  }
+
+function isAdditionalTaskEntry(entry: ClassScheduleEntry) {
+  return (
+    entry.schoolYear === schoolYear &&
+    Boolean(entry.teacherId) &&
+    (entry.custom === true || entry.sourceAssignmentId.startsWith("custom:"))
+  );
+}
+
+function formatAdditionalTask(entry: ClassScheduleEntry) {
+  const title = entry.customTitle || entry.subjectId || "Additional Task/Subject";
+  const hours = Number(entry.duration || 0);
+  const hoursText = hours > 0 ? ` (${hours} unit${hours === 1 ? "" : "s"})` : "";
+  return `${title}${hoursText}`;
+}
+
+  function getAdditionalTaskLoad(entry: ClassScheduleEntry) {
+    return Number(entry.duration || 0);
+  }
 
   const rows = useMemo<TeacherLoadRow[]>(
     () =>
@@ -104,7 +137,44 @@ export function TeacherLoadsPage() {
                   (assignment) =>
                     assignment.term === term,
                 )
-                .reduce((sum, assignment) => sum + Number(assignment.units || 0), 0);
+                .reduce((sum, assignment) => sum + getAssignmentUnits(assignment), 0);
+
+              return loads;
+            },
+            {} as Record<AcademicTerm, number>,
+          );
+          const termPrepCounts = termOptions.reduce(
+            (counts, term) => {
+              counts[term] = new Set(
+                teacherAssignments
+                  .filter((assignment) => assignment.term === term)
+                  .map((assignment) => assignment.subjectId),
+              ).size;
+
+              return counts;
+            },
+            {} as Record<AcademicTerm, number>,
+          );
+          const teacherAdditionalTasks = scheduleEntries.filter(
+            (entry) => entry.teacherId === teacher.teacherId && isAdditionalTaskEntry(entry),
+          );
+          const additionalTasksByTerm = termOptions.reduce(
+            (tasks, term) => {
+              tasks[term] = [...new Set(
+                teacherAdditionalTasks
+                  .filter((entry) => entry.term === term)
+                  .map(formatAdditionalTask),
+              )].sort((first, second) => first.localeCompare(second));
+
+              return tasks;
+            },
+            {} as Record<AcademicTerm, string[]>,
+          );
+          const additionalTaskLoadsByTerm = termOptions.reduce(
+            (loads, term) => {
+              loads[term] = teacherAdditionalTasks
+                .filter((entry) => entry.term === term)
+                .reduce((sum, entry) => sum + getAdditionalTaskLoad(entry), 0);
 
               return loads;
             },
@@ -120,6 +190,9 @@ export function TeacherLoadsPage() {
           return {
             teacher,
             termLoads,
+            termPrepCounts,
+            additionalTasksByTerm,
+            additionalTaskLoadsByTerm,
             prepCount: new Set(
               teacherAssignments.map((assignment) => assignment.subjectId),
             ).size,
@@ -130,7 +203,7 @@ export function TeacherLoadsPage() {
           };
         })
         .sort((first, second) => first.teacher.fullName.localeCompare(second.teacher.fullName)),
-    [ancillaryLoads, assignments, schoolYear, scopedTeacherId, teachers],
+    [ancillaryLoads, assignments, scheduleEntries, schoolYear, scopedTeacherId, subjectsById, teachers],
   );
 
   useEffect(() => {
@@ -184,6 +257,11 @@ export function TeacherLoadsPage() {
     [ancillaryLoads, schoolYear, selectedTeacherId],
   );
 
+  const selectedAdditionalTasks = useMemo(
+    () => getTeacherAdditionalTasks(selectedTeacherId),
+    [scheduleEntries, schoolYear, selectedTeacherId],
+  );
+
   function getTeacherAssignments(teacherId: string) {
     return assignments
       .filter(
@@ -219,6 +297,16 @@ export function TeacherLoadsPage() {
           load.schoolYear === schoolYear,
       )
       .sort((first, second) => first.ancillary.localeCompare(second.ancillary));
+  }
+
+  function getTeacherAdditionalTasks(teacherId: string, term?: AcademicTerm) {
+    return scheduleEntries
+      .filter((entry) => entry.teacherId === teacherId && isAdditionalTaskEntry(entry))
+      .filter((entry) => !term || entry.term === term)
+      .sort((first, second) =>
+        termOptions.indexOf(first.term as AcademicTerm) - termOptions.indexOf(second.term as AcademicTerm) ||
+        formatAdditionalTask(first).localeCompare(formatAdditionalTask(second)),
+      );
   }
 
   function openPrintableReport(title: string, body: string) {
@@ -321,6 +409,7 @@ export function TeacherLoadsPage() {
       .map((row) => {
         const teacherAssignments = getTeacherAssignments(row.teacher.teacherId);
         const teacherAncillaryLoads = getTeacherAncillaryLoads(row.teacher.teacherId);
+        const teacherAdditionalTasks = getTeacherAdditionalTasks(row.teacher.teacherId);
         const assignmentRows = teacherAssignments.length
           ? teacherAssignments
               .map((assignment) => {
@@ -336,7 +425,7 @@ export function TeacherLoadsPage() {
                     </td>
                     <td>${escapeHtml(section?.sectionName ?? assignment.sectionId)}</td>
                     <td>${escapeHtml(`Grade ${section?.gradeLevel ?? assignment.gradeLevel} - ${section?.strand ?? assignment.strand}`)}</td>
-                    <td class="right">${escapeHtml(assignment.units)}</td>
+                    <td class="right">${escapeHtml(getAssignmentUnits(assignment))}</td>
                   </tr>
                 `;
               })
@@ -355,6 +444,19 @@ export function TeacherLoadsPage() {
               )
               .join("")
           : `<tr><td colspan="3">No ancilliary loads for ${escapeHtml(schoolYear)}.</td></tr>`;
+        const additionalTaskRows = teacherAdditionalTasks.length
+          ? teacherAdditionalTasks
+              .map(
+                (entry) => `
+                  <tr>
+                    <td>${escapeHtml(entry.term)}</td>
+                    <td>${escapeHtml(entry.customTitle || entry.subjectId || "Additional Task/Subject")}</td>
+                    <td class="right">${escapeHtml(getAdditionalTaskLoad(entry))}</td>
+                  </tr>
+                `,
+              )
+              .join("")
+          : `<tr><td colspan="3">No additional tasks/subjects for ${escapeHtml(schoolYear)}.</td></tr>`;
 
         return `
           <section class="page">
@@ -394,6 +496,17 @@ export function TeacherLoadsPage() {
               </thead>
               <tbody>${ancillaryRows}</tbody>
             </table>
+            <h3 class="section-title">Additional Task/Subject</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Term</th>
+                  <th>Task/Subject</th>
+                  <th class="right">Units</th>
+                </tr>
+              </thead>
+              <tbody>${additionalTaskRows}</tbody>
+            </table>
           </section>
         `;
       })
@@ -405,41 +518,44 @@ export function TeacherLoadsPage() {
   function printSummaryLoadingPdf() {
     const summaryRows = rows
       .map(
-        (row) => `
-          <tr>
-            <td>${escapeHtml(row.teacher.fullName)}</td>
-            <td>${escapeHtml(row.teacher.position)}</td>
-            <td>${escapeHtml(row.teacher.specialization)}</td>
-            <td class="right">${escapeHtml(row.prepCount)}</td>
-            <td class="right">${escapeHtml(row.termLoads["1st Term"])}</td>
-            <td class="right">${escapeHtml(row.termLoads["2nd Term"])}</td>
-            <td class="right">${escapeHtml(row.termLoads["3rd Term"])}</td>
-            <td class="right">${escapeHtml(row.teachingLoad)}</td>
-            <td class="right">${escapeHtml(row.ancillaryLoad)}</td>
-            <td class="right">${escapeHtml(row.totalLoad)}</td>
-          </tr>
-        `,
+        (row) => {
+          const additionalTaskLoad = row.additionalTaskLoadsByTerm[summaryTerm];
+          const totalTermLoad = row.termLoads[summaryTerm] + row.ancillaryLoad + additionalTaskLoad;
+
+          return `
+            <tr>
+              <td>${escapeHtml(row.teacher.fullName)}</td>
+              <td>${escapeHtml(row.teacher.specialization)}</td>
+              <td class="right">${escapeHtml(row.teacher.maxLoad)}</td>
+              <td class="right">${escapeHtml(row.termPrepCounts[summaryTerm])}</td>
+              <td class="right">${escapeHtml(row.ancillaryLoad)}</td>
+              <td class="right">${escapeHtml(row.termLoads[summaryTerm])}</td>
+              <td>${escapeHtml(row.additionalTasksByTerm[summaryTerm].join(", ") || "-")}</td>
+              <td class="right">${escapeHtml(additionalTaskLoad)}</td>
+              <td class="right">${escapeHtml(totalTermLoad)}</td>
+            </tr>
+          `;
+        },
       )
       .join("");
     const body = `
       <section class="page">
         <div class="report-title">
           <h1>Loading Summary</h1>
-          <p class="muted">School Year ${escapeHtml(schoolYear)}</p>
+          <p class="muted">School Year ${escapeHtml(schoolYear)} - ${escapeHtml(summaryTerm)}</p>
         </div>
         <table class="summary-table">
           <thead>
             <tr>
               <th>Teacher</th>
-              <th>Position</th>
               <th>Specialization</th>
+              <th class="right">Max / Term</th>
               <th class="right">Prep</th>
-              <th class="right">1st</th>
-              <th class="right">2nd</th>
-              <th class="right">3rd</th>
-              <th class="right">Teaching</th>
               <th class="right">Ancilliary</th>
-              <th class="right">Total</th>
+              <th class="right">Teaching Load</th>
+              <th>Additional Task/Subject</th>
+              <th class="right">Additional Load</th>
+              <th class="right">Total Load</th>
             </tr>
           </thead>
           <tbody>${summaryRows}</tbody>
@@ -447,7 +563,7 @@ export function TeacherLoadsPage() {
       </section>
     `;
 
-    openPrintableReport(`Loading Summary - ${schoolYear}`, body);
+    openPrintableReport(`Loading Summary - ${schoolYear} - ${summaryTerm}`, body);
   }
 
   const columns: DataColumn<TeacherLoadRow>[] = [
@@ -487,8 +603,23 @@ export function TeacherLoadsPage() {
     { header: "2nd Term", render: (row) => <TermLoadCell load={row.termLoads["2nd Term"]} /> },
     { header: "3rd Term", render: (row) => <TermLoadCell load={row.termLoads["3rd Term"]} /> },
     {
-      header: "Total Current Load",
-      render: (row) => <span className="font-bold text-slate-950">{row.totalLoad} units</span>,
+      header: `Additional Task/Subject (${summaryTerm})`,
+      render: (row) => (
+        <div className="text-sm text-slate-700">
+          <p>{row.additionalTasksByTerm[summaryTerm].join(", ") || "-"}</p>
+          <p className="mt-1 font-semibold text-slate-950">
+            {row.additionalTaskLoadsByTerm[summaryTerm]} units
+          </p>
+        </div>
+      ),
+    },
+    {
+      header: `Total Load (${summaryTerm})`,
+      render: (row) => (
+        <span className="font-bold text-slate-950">
+          {row.termLoads[summaryTerm] + row.ancillaryLoad + row.additionalTaskLoadsByTerm[summaryTerm]} units
+        </span>
+      ),
     },
   ];
 
@@ -502,6 +633,17 @@ export function TeacherLoadsPage() {
               onChange={(event) => setSchoolYear(event.target.value)}
               value={schoolYear}
             />
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm"
+              onChange={(event) => setSummaryTerm(event.target.value as AcademicTerm)}
+              value={summaryTerm}
+            >
+              {termOptions.map((termOption) => (
+                <option key={termOption} value={termOption}>
+                  {termOption}
+                </option>
+              ))}
+            </select>
             <button
               className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               onClick={printDetailedLoadingPdf}
@@ -537,7 +679,9 @@ export function TeacherLoadsPage() {
               </p>
             </div>
             <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
-              {selectedRow.totalLoad} total units - {selectedRow.prepCount} prep - {selectedRow.ancillaryLoad} ancilliary units
+              {selectedRow.termLoads[summaryTerm] + selectedRow.ancillaryLoad + selectedRow.additionalTaskLoadsByTerm[summaryTerm]} total units ({summaryTerm}) -{" "}
+              {selectedRow.termPrepCounts[summaryTerm]} prep - {selectedRow.ancillaryLoad} ancilliary -{" "}
+              {selectedRow.additionalTaskLoadsByTerm[summaryTerm]} additional
             </span>
           </div>
 
@@ -581,7 +725,7 @@ export function TeacherLoadsPage() {
                           {section?.strand ?? assignment.strand}
                         </td>
                         <td className="px-4 py-3 text-right align-middle font-semibold text-slate-950">
-                          {assignment.units} units
+                          {getAssignmentUnits(assignment)} units
                         </td>
                       </tr>
                     );
@@ -617,6 +761,39 @@ export function TeacherLoadsPage() {
                         </td>
                         <td className="px-4 py-3 text-right align-middle font-semibold text-slate-950">
                           {Number(load.units || 0)} units
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="border-t border-slate-200 px-4 py-3">
+            <h3 className="text-sm font-semibold text-slate-950">Additional Task/Subject</h3>
+            {selectedAdditionalTasks.length === 0 ? (
+              <p className="mt-2 text-sm text-slate-600">
+                No additional tasks/subjects added for {schoolYear}.
+              </p>
+            ) : (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full min-w-[520px] text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-4 py-3 font-semibold">Term</th>
+                      <th className="px-4 py-3 font-semibold">Task/Subject</th>
+                      <th className="px-4 py-3 text-right font-semibold">Units</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {selectedAdditionalTasks.map((entry) => (
+                      <tr className="hover:bg-slate-50/70" key={entry.scheduleId}>
+                        <td className="px-4 py-3 align-middle">{entry.term}</td>
+                        <td className="px-4 py-3 align-middle font-semibold text-slate-950">
+                          {entry.customTitle || entry.subjectId || "Additional Task/Subject"}
+                        </td>
+                        <td className="px-4 py-3 text-right align-middle font-semibold text-slate-950">
+                          {getAdditionalTaskLoad(entry)} unit{getAdditionalTaskLoad(entry) === 1 ? "" : "s"}
                         </td>
                       </tr>
                     ))}

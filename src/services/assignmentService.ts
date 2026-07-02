@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteField,
   deleteDoc,
   doc,
   onSnapshot,
@@ -7,10 +8,27 @@ import {
   serverTimestamp,
   setDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import type { LoadAssignment } from "../types/loading";
+import type { CurriculumMapping, LoadAssignment, Section, Subject } from "../types/loading";
 import { subscribeCollection } from "./firestoreCrud";
+
+const firestoreBatchLimit = 450;
+
+export type LoadAssignmentSyncResult = {
+  updated: number;
+  removed: number;
+  skipped: number;
+};
+
+function chunkBatchWrites(writes: Array<(batch: ReturnType<typeof writeBatch>) => void>) {
+  const chunks: Array<Array<(batch: ReturnType<typeof writeBatch>) => void>> = [];
+  for (let index = 0; index < writes.length; index += firestoreBatchLimit) {
+    chunks.push(writes.slice(index, index + firestoreBatchLimit));
+  }
+  return chunks;
+}
 
 export const subscribeLoadAssignments = (
   callback: (assignments: LoadAssignment[]) => void,
@@ -52,16 +70,21 @@ export async function saveLoadAssignment(
     assignment.subjectId,
     assignment.sectionId,
   );
+  const { hoursPerSession, ...requiredAssignment } = assignment;
+  const normalizedHoursPerSession = Number(hoursPerSession || 0);
+  const assignmentData = {
+    ...requiredAssignment,
+    assignmentId,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    ...(normalizedHoursPerSession > 0
+      ? { hoursPerSession: normalizedHoursPerSession }
+      : {}),
+  };
 
   return setDoc(
     doc(db, "loadAssignments", assignmentId),
-    {
-      ...assignment,
-      assignmentId,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
+    assignmentData,
   );
 }
 
@@ -74,4 +97,88 @@ export async function removeLoadAssignment(
   return deleteDoc(
     doc(db, "loadAssignments", getAssignmentId(schoolYear, term, subjectId, sectionId)),
   );
+}
+
+export async function syncLoadAssignmentsForPeriod({
+  assignments,
+  mappings,
+  schoolYear,
+  sections,
+  subjects,
+  term,
+}: {
+  assignments: LoadAssignment[];
+  mappings: CurriculumMapping[];
+  schoolYear: string;
+  sections: Section[];
+  subjects: Subject[];
+  term: string;
+}): Promise<LoadAssignmentSyncResult> {
+  const subjectsById = new Map(subjects.map((subject) => [subject.subjectId, subject]));
+  const sectionsById = new Map(sections.map((section) => [section.sectionId, section]));
+  const mappedCells = new Set(
+    mappings
+      .filter((mapping) => mapping.schoolYear === schoolYear && mapping.term === term)
+      .map((mapping) => `${mapping.sectionId}:${mapping.subjectId}`),
+  );
+  let updated = 0;
+  let removed = 0;
+  let skipped = 0;
+  const writes: Array<(batch: ReturnType<typeof writeBatch>) => void> = [];
+
+  assignments
+    .filter((assignment) => assignment.schoolYear === schoolYear && assignment.term === term)
+    .forEach((assignment) => {
+      const subject = subjectsById.get(assignment.subjectId);
+      const section = sectionsById.get(assignment.sectionId);
+      const isMapped = mappedCells.has(`${assignment.sectionId}:${assignment.subjectId}`);
+      const assignmentRef = doc(db, "loadAssignments", assignment.assignmentId);
+
+      if (!subject || !section || !isMapped) {
+        writes.push((batch) => batch.delete(assignmentRef));
+        removed += 1;
+        return;
+      }
+
+      if (subject.term !== term || section.schoolYear !== schoolYear) {
+        writes.push((batch) => batch.delete(assignmentRef));
+        removed += 1;
+        return;
+      }
+
+      if (section.gradeLevel !== subject.gradeLevel) {
+        skipped += 1;
+        return;
+      }
+
+      const normalizedHoursPerSession = Number(subject.hoursPerSession || 0);
+      const syncedAssignment = {
+        gradeLevel: section.gradeLevel,
+        strand: section.strand,
+        units: Number(subject.units || 0),
+        updatedAt: serverTimestamp(),
+        hoursPerSession:
+          normalizedHoursPerSession > 0 ? normalizedHoursPerSession : deleteField(),
+      };
+      const alreadySynced =
+        assignment.gradeLevel === syncedAssignment.gradeLevel &&
+        assignment.strand === syncedAssignment.strand &&
+        Number(assignment.units || 0) === syncedAssignment.units &&
+        Number(assignment.hoursPerSession || 0) === normalizedHoursPerSession;
+
+      if (alreadySynced) return;
+
+      writes.push((batch) => batch.update(assignmentRef, syncedAssignment));
+      updated += 1;
+    });
+
+  await Promise.all(
+    chunkBatchWrites(writes).map((chunk) => {
+      const batch = writeBatch(db);
+      chunk.forEach((write) => write(batch));
+      return batch.commit();
+    }),
+  );
+
+  return { updated, removed, skipped };
 }
