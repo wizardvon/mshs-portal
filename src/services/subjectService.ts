@@ -8,6 +8,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import type { Subject } from "../types/loading";
+import { withLegacyUnits } from "../utils/loadHours";
 import { createRecord, deleteRecord, subscribeCollection, updateRecord } from "./firestoreCrud";
 
 const firestoreBatchLimit = 450;
@@ -23,12 +24,17 @@ function chunkBatchWrites(writes: Array<(batch: ReturnType<typeof writeBatch>) =
 export const subscribeSubjects = (callback: (subjects: Subject[]) => void) =>
   subscribeCollection<Subject>("subjects", callback);
 
-export const createSubject = (subject: Omit<Subject, "subjectId" | "createdAt" | "updatedAt">) =>
-  createRecord<Subject>("subjects", "subjectId", subject as Subject);
+export const createSubject = (subject: Omit<Subject, "subjectId" | "createdAt" | "updatedAt">) => {
+  const loadHours = subject.loadHours ?? subject.units;
+  return createRecord<Subject>("subjects", "subjectId", {
+    ...subject,
+    ...withLegacyUnits(loadHours),
+  } as Subject);
+};
 
 async function syncSubjectScheduleSettingsToLoadAssignments(
   subjectId: string,
-  settings: Partial<Pick<Subject, "units" | "hoursPerSession">>,
+  settings: Partial<Pick<Subject, "units" | "loadHours" | "hoursPerSession">>,
 ) {
   const assignmentsQuery = query(
     collection(db, "loadAssignments"),
@@ -52,11 +58,21 @@ async function syncSubjectScheduleSettingsToLoadAssignments(
 }
 
 export async function updateSubject(subjectId: string, subject: Partial<Subject>) {
-  await updateRecord<Subject>("subjects", subjectId, subject);
+  const normalizedSubject =
+    subject.units !== undefined || subject.loadHours !== undefined
+      ? {
+          ...subject,
+          ...withLegacyUnits(subject.loadHours ?? subject.units),
+        }
+      : subject;
 
-  if (subject.units !== undefined || subject.hoursPerSession !== undefined) {
+  await updateRecord<Subject>("subjects", subjectId, normalizedSubject);
+
+  if (subject.units !== undefined || subject.loadHours !== undefined || subject.hoursPerSession !== undefined) {
     await syncSubjectScheduleSettingsToLoadAssignments(subjectId, {
-      ...(subject.units !== undefined ? { units: Number(subject.units || 0) } : {}),
+      ...(subject.units !== undefined || subject.loadHours !== undefined
+        ? withLegacyUnits(subject.loadHours ?? subject.units)
+        : {}),
       ...(subject.hoursPerSession !== undefined
         ? { hoursPerSession: Number(subject.hoursPerSession || 0) }
         : {}),

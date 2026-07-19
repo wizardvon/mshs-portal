@@ -20,18 +20,18 @@ export function DataTable<T>({
   getKey,
 }: DataTableProps<T>) {
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-200/70">
       {data.length === 0 ? (
-        <div className="p-5 text-sm text-slate-600">{emptyText}</div>
+        <div className="p-6 text-sm font-medium text-slate-600">{emptyText}</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-left text-sm">
-            <thead className="bg-slate-50 text-slate-600">
+            <thead className="bg-gradient-to-r from-wine to-civic text-white">
               <tr>
                 {columns.map((column) => (
                   <th
                     className={[
-                      "px-4 py-3 font-semibold",
+                      "px-4 py-3 text-xs font-bold uppercase tracking-wide",
                       column.align === "right" ? "text-right" : "text-left",
                     ].join(" ")}
                     key={column.header}
@@ -43,11 +43,11 @@ export function DataTable<T>({
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {data.map((row) => (
-                <tr className="hover:bg-slate-50/70" key={getKey(row)}>
+                <tr className="transition hover:bg-red-50/40" key={getKey(row)}>
                   {columns.map((column) => (
                     <td
                       className={[
-                        "px-4 py-3 align-middle",
+                        "px-4 py-3.5 align-middle",
                         column.align === "right" ? "text-right" : "text-left",
                       ].join(" ")}
                       key={column.header}

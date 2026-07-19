@@ -46,13 +46,13 @@ export function ForgotPasswordPage() {
           value={email}
         />
         {message && (
-          <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
             {message}
           </p>
         )}
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {error && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{error}</p>}
         <button
-          className="h-11 w-full rounded-md bg-civic px-4 text-sm font-semibold text-white transition hover:bg-civic/90 disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-12 w-full rounded-xl bg-gradient-to-r from-wine to-civic px-4 text-sm font-bold text-white shadow-lg shadow-red-950/20 transition hover:-translate-y-0.5 hover:from-[#4a0000] hover:to-ember disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
           disabled={submitting}
           type="submit"
         >

@@ -1,4 +1,5 @@
 import type { LoadAssignment, Teacher } from "../types/loading";
+import { getLoadHours } from "./loadHours";
 import { getLoadStatus } from "./statusRules";
 
 export function getTeacherTotalLoad(
@@ -14,7 +15,7 @@ export function getTeacherTotalLoad(
         assignment.schoolYear === schoolYear &&
         assignment.term === term,
     )
-    .reduce((sum, assignment) => sum + Number(assignment.units || 0), 0);
+    .reduce((sum, assignment) => sum + getLoadHours(assignment), 0);
 }
 
 export function buildTeacherLoadSummaries(

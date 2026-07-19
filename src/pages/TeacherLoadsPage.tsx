@@ -12,6 +12,7 @@ import { subscribeTeachers } from "../services/teacherService";
 import type { AcademicTerm, AncillaryLoad, ClassScheduleEntry, LoadAssignment, Section, Subject, Teacher } from "../types/loading";
 import { defaultSchoolYear, defaultTerm, termOptions } from "../types/loading";
 import { useAuth } from "../providers/AuthProvider";
+import { getLoadHours } from "../utils/loadHours";
 import { getLoadStatus } from "../utils/statusRules";
 
 type TeacherLoadRow = {
@@ -22,7 +23,7 @@ type TeacherLoadRow = {
   additionalTaskLoadsByTerm: Record<AcademicTerm, number>;
   prepCount: number;
   teachingLoad: number;
-  ancillaryUnits: number;
+  ancillaryHours: number;
   ancillaryLoad: number;
   totalLoad: number;
 };
@@ -32,7 +33,7 @@ function TermLoadCell({ load }: { load: number }) {
 
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-semibold text-slate-950">{load} units</span>
+      <span className="font-semibold text-slate-950">{load} hours</span>
       <StatusBadge
         label={status}
         tone={
@@ -91,8 +92,8 @@ export function TeacherLoadsPage() {
     [sections],
   );
 
-  function getAssignmentUnits(assignment: LoadAssignment) {
-    return Number(subjectsById.get(assignment.subjectId)?.units ?? assignment.units ?? 0);
+  function getAssignmentHours(assignment: LoadAssignment) {
+    return getLoadHours(subjectsById.get(assignment.subjectId) ?? assignment);
   }
 
 function isAdditionalTaskEntry(entry: ClassScheduleEntry) {
@@ -106,7 +107,7 @@ function isAdditionalTaskEntry(entry: ClassScheduleEntry) {
 function formatAdditionalTask(entry: ClassScheduleEntry) {
   const title = entry.customTitle || entry.subjectId || "Additional Task/Subject";
   const hours = Number(entry.duration || 0);
-  const hoursText = hours > 0 ? ` (${hours} unit${hours === 1 ? "" : "s"})` : "";
+  const hoursText = hours > 0 ? ` (${hours} hour${hours === 1 ? "" : "s"})` : "";
   return `${title}${hoursText}`;
 }
 
@@ -137,7 +138,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                   (assignment) =>
                     assignment.term === term,
                 )
-                .reduce((sum, assignment) => sum + getAssignmentUnits(assignment), 0);
+                .reduce((sum, assignment) => sum + getAssignmentHours(assignment), 0);
 
               return loads;
             },
@@ -181,11 +182,11 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
             {} as Record<AcademicTerm, number>,
           );
           const teachingLoad = termOptions.reduce((sum, term) => sum + termLoads[term], 0);
-          const ancillaryUnits = teacherAncillaryLoads.reduce(
-            (sum, load) => sum + Number(load.units || 0),
+          const ancillaryHours = teacherAncillaryLoads.reduce(
+            (sum, load) => sum + getLoadHours(load),
             0,
           );
-          const ancillaryLoad = ancillaryUnits;
+          const ancillaryLoad = ancillaryHours;
 
           return {
             teacher,
@@ -197,7 +198,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
               teacherAssignments.map((assignment) => assignment.subjectId),
             ).size,
             teachingLoad,
-            ancillaryUnits,
+            ancillaryHours,
             ancillaryLoad,
             totalLoad: teachingLoad + ancillaryLoad,
           };
@@ -425,7 +426,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                     </td>
                     <td>${escapeHtml(section?.sectionName ?? assignment.sectionId)}</td>
                     <td>${escapeHtml(`Grade ${section?.gradeLevel ?? assignment.gradeLevel} - ${section?.strand ?? assignment.strand}`)}</td>
-                    <td class="right">${escapeHtml(getAssignmentUnits(assignment))}</td>
+                    <td class="right">${escapeHtml(getAssignmentHours(assignment))}</td>
                   </tr>
                 `;
               })
@@ -437,8 +438,8 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                 (load) => `
                   <tr>
                     <td>${escapeHtml(load.ancillary)}</td>
-                    <td class="right">${escapeHtml(load.units)}</td>
-                    <td class="right">${escapeHtml(Number(load.units || 0))}</td>
+                    <td class="right">${escapeHtml(getLoadHours(load))}</td>
+                    <td class="right">${escapeHtml(getLoadHours(load))}</td>
                   </tr>
                 `,
               )
@@ -467,10 +468,10 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
             <h2>${escapeHtml(row.teacher.fullName)}</h2>
             <p class="muted">${escapeHtml(row.teacher.position)} - ${escapeHtml(row.teacher.specialization)}</p>
             <div class="meta">
-              <div class="box"><div class="box-label">Teaching Load</div><div class="box-value">${escapeHtml(row.teachingLoad)} units</div></div>
+              <div class="box"><div class="box-label">Teaching Load</div><div class="box-value">${escapeHtml(row.teachingLoad)} hours</div></div>
               <div class="box"><div class="box-label">Prep</div><div class="box-value">${escapeHtml(row.prepCount)}</div></div>
-              <div class="box"><div class="box-label">Ancilliary Load</div><div class="box-value">${escapeHtml(row.ancillaryLoad)} units</div></div>
-              <div class="box"><div class="box-label">Total Load</div><div class="box-value">${escapeHtml(row.totalLoad)} units</div></div>
+              <div class="box"><div class="box-label">Ancilliary Load</div><div class="box-value">${escapeHtml(row.ancillaryLoad)} hours</div></div>
+              <div class="box"><div class="box-label">Total Load</div><div class="box-value">${escapeHtml(row.totalLoad)} hours</div></div>
             </div>
             <h3 class="section-title">Assigned Subjects</h3>
             <table>
@@ -480,7 +481,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                   <th>Subject</th>
                   <th>Section</th>
                   <th>Grade / Strand</th>
-                  <th class="right">Units</th>
+                  <th class="right">Hours</th>
                 </tr>
               </thead>
               <tbody>${assignmentRows}</tbody>
@@ -490,7 +491,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
               <thead>
                 <tr>
                   <th>Ancilliary</th>
-                  <th class="right">Units</th>
+                  <th class="right">Hours</th>
                   <th class="right">Added Load</th>
                 </tr>
               </thead>
@@ -502,7 +503,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                 <tr>
                   <th>Term</th>
                   <th>Task/Subject</th>
-                  <th class="right">Units</th>
+                  <th class="right">Hours</th>
                 </tr>
               </thead>
               <tbody>${additionalTaskRows}</tbody>
@@ -586,7 +587,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
       ),
     },
     { header: "Specialization", render: (row) => row.teacher.specialization },
-    { header: "Max / Term", render: (row) => `${row.teacher.maxLoad} units` },
+    { header: "Max / Term", render: (row) => `${row.teacher.maxLoad} hours` },
     {
       header: "Prep",
       render: (row) => <span className="font-semibold text-slate-950">{row.prepCount}</span>,
@@ -595,7 +596,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
       header: "Ancilliary",
       render: (row) => (
         <div>
-          <p className="font-semibold text-slate-950">{row.ancillaryLoad} units</p>
+          <p className="font-semibold text-slate-950">{row.ancillaryLoad} hours</p>
         </div>
       ),
     },
@@ -608,7 +609,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
         <div className="text-sm text-slate-700">
           <p>{row.additionalTasksByTerm[summaryTerm].join(", ") || "-"}</p>
           <p className="mt-1 font-semibold text-slate-950">
-            {row.additionalTaskLoadsByTerm[summaryTerm]} units
+            {row.additionalTaskLoadsByTerm[summaryTerm]} hours
           </p>
         </div>
       ),
@@ -617,7 +618,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
       header: `Total Load (${summaryTerm})`,
       render: (row) => (
         <span className="font-bold text-slate-950">
-          {row.termLoads[summaryTerm] + row.ancillaryLoad + row.additionalTaskLoadsByTerm[summaryTerm]} units
+          {row.termLoads[summaryTerm] + row.ancillaryLoad + row.additionalTaskLoadsByTerm[summaryTerm]} hours
         </span>
       ),
     },
@@ -679,7 +680,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
               </p>
             </div>
             <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
-              {selectedRow.termLoads[summaryTerm] + selectedRow.ancillaryLoad + selectedRow.additionalTaskLoadsByTerm[summaryTerm]} total units ({summaryTerm}) -{" "}
+              {selectedRow.termLoads[summaryTerm] + selectedRow.ancillaryLoad + selectedRow.additionalTaskLoadsByTerm[summaryTerm]} total hours ({summaryTerm}) -{" "}
               {selectedRow.termPrepCounts[summaryTerm]} prep - {selectedRow.ancillaryLoad} ancilliary -{" "}
               {selectedRow.additionalTaskLoadsByTerm[summaryTerm]} additional
             </span>
@@ -698,7 +699,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                     <th className="px-4 py-3 font-semibold">Subject</th>
                     <th className="px-4 py-3 font-semibold">Section</th>
                     <th className="px-4 py-3 font-semibold">Grade / Strand</th>
-                    <th className="px-4 py-3 text-right font-semibold">Units</th>
+                    <th className="px-4 py-3 text-right font-semibold">Hours</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -725,7 +726,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                           {section?.strand ?? assignment.strand}
                         </td>
                         <td className="px-4 py-3 text-right align-middle font-semibold text-slate-950">
-                          {getAssignmentUnits(assignment)} units
+                          {getAssignmentHours(assignment)} hours
                         </td>
                       </tr>
                     );
@@ -746,7 +747,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Ancilliary</th>
-                      <th className="px-4 py-3 text-right font-semibold">Units</th>
+                      <th className="px-4 py-3 text-right font-semibold">Hours</th>
                       <th className="px-4 py-3 text-right font-semibold">Added Load</th>
                     </tr>
                   </thead>
@@ -757,10 +758,10 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                           {load.ancillary}
                         </td>
                         <td className="px-4 py-3 text-right align-middle">
-                          {load.units}
+                          {getLoadHours(load)}
                         </td>
                         <td className="px-4 py-3 text-right align-middle font-semibold text-slate-950">
-                          {Number(load.units || 0)} units
+                          {getLoadHours(load)} hours
                         </td>
                       </tr>
                     ))}
@@ -782,7 +783,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                     <tr>
                       <th className="px-4 py-3 font-semibold">Term</th>
                       <th className="px-4 py-3 font-semibold">Task/Subject</th>
-                      <th className="px-4 py-3 text-right font-semibold">Units</th>
+                      <th className="px-4 py-3 text-right font-semibold">Hours</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -793,7 +794,7 @@ function formatAdditionalTask(entry: ClassScheduleEntry) {
                           {entry.customTitle || entry.subjectId || "Additional Task/Subject"}
                         </td>
                         <td className="px-4 py-3 text-right align-middle font-semibold text-slate-950">
-                          {getAdditionalTaskLoad(entry)} unit{getAdditionalTaskLoad(entry) === 1 ? "" : "s"}
+                          {getAdditionalTaskLoad(entry)} hour{getAdditionalTaskLoad(entry) === 1 ? "" : "s"}
                         </td>
                       </tr>
                     ))}

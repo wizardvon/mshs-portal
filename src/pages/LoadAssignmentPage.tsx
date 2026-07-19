@@ -15,6 +15,7 @@ import { subscribeSubjects } from "../services/subjectService";
 import { subscribeTeachers } from "../services/teacherService";
 import type { AcademicTerm, CurriculumMapping, LoadAssignment, Section, Subject, SubjectCategory, Teacher } from "../types/loading";
 import { defaultSchoolYear, defaultTerm, subjectCategories, termOptions } from "../types/loading";
+import { getLoadHours, withLegacyUnits } from "../utils/loadHours";
 
 type SectionSort = "sectionName" | "gradeLevel" | "strand";
 type SubjectSort = "subjectName" | "subjectCode" | "units";
@@ -147,7 +148,7 @@ export function LoadAssignmentPage() {
         subjectId: change.subject.subjectId,
         sectionId: change.section.sectionId,
         teacherId: change.teacherId,
-        units: Number(change.subject.units || 0),
+        ...withLegacyUnits(getLoadHours(change.subject)),
         hoursPerSession: Number(change.subject.hoursPerSession || 0) || undefined,
       });
     });
@@ -263,7 +264,7 @@ export function LoadAssignmentPage() {
       activeSubjects
         .filter((subject) => mappedSubjectIds.has(subject.subjectId))
         .sort((first, second) => {
-          if (subjectSort === "units") return first.units - second.units;
+          if (subjectSort === "units") return getLoadHours(first) - getLoadHours(second);
           return String(first[subjectSort]).localeCompare(String(second[subjectSort]));
         }),
     [activeSubjects, mappedSubjectIds, subjectSort],
@@ -316,7 +317,7 @@ export function LoadAssignmentPage() {
             subjectId: change.subject.subjectId,
             sectionId: change.section.sectionId,
             teacherId: change.teacherId,
-            units: Number(change.subject.units || 0),
+            ...withLegacyUnits(getLoadHours(change.subject)),
             hoursPerSession: Number(change.subject.hoursPerSession || 0) || undefined,
           });
         }),
@@ -515,8 +516,8 @@ export function LoadAssignmentPage() {
         const sectionSubjects = mappedSubjects.filter((subject) =>
           sectionSubjectIds.has(subject.subjectId),
         );
-        const totalUnits = sectionSubjects.reduce(
-          (sum, subject) => sum + Number(subject.units || 0),
+        const totalHours = sectionSubjects.reduce(
+          (sum, subject) => sum + getLoadHours(subject),
           0,
         );
         const assignedCount = sectionSubjects.filter((subject) =>
@@ -545,7 +546,7 @@ export function LoadAssignmentPage() {
                       <span class="muted">${escapeHtml(subject.subjectCode)}</span>
                     </td>
                     <td>${escapeHtml(subject.category)}</td>
-                    <td class="right">${escapeHtml(subject.units)}</td>
+                    <td class="right">${escapeHtml(getLoadHours(subject))}</td>
                     <td>${teacher ? escapeHtml(teacher.fullName) : '<span class="unassigned">Unassigned</span>'}</td>
                     <td>${teacher ? escapeHtml(teacher.specialization) : ""}</td>
                   </tr>
@@ -567,14 +568,14 @@ export function LoadAssignmentPage() {
               <div class="box"><div class="box-label">Subjects</div><div class="box-value">${escapeHtml(sectionSubjects.length)}</div></div>
               <div class="box"><div class="box-label">Assigned</div><div class="box-value">${escapeHtml(assignedCount)}</div></div>
               <div class="box"><div class="box-label">Unassigned</div><div class="box-value">${escapeHtml(sectionSubjects.length - assignedCount)}</div></div>
-              <div class="box"><div class="box-label">Total Units</div><div class="box-value">${escapeHtml(totalUnits)}</div></div>
+              <div class="box"><div class="box-label">Total Hours</div><div class="box-value">${escapeHtml(totalHours)}</div></div>
             </div>
             <table>
               <thead>
                 <tr>
                   <th>Subject</th>
                   <th>Category</th>
-                  <th class="right">Units</th>
+                  <th class="right">Hours</th>
                   <th>Teacher</th>
                   <th>Specialization</th>
                 </tr>
@@ -741,7 +742,7 @@ export function LoadAssignmentPage() {
             >
               <option value="subjectName">Subject name</option>
               <option value="subjectCode">Subject code</option>
-              <option value="units">Units</option>
+              <option value="units">Hours</option>
             </select>
           </label>
         </div>

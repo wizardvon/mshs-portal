@@ -1,6 +1,7 @@
 import { FirebaseError } from "firebase/app";
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { ArrowRight, Lock, Mail } from "lucide-react";
 import { AuthLayout } from "../components/AuthLayout";
 import { TextField } from "../components/FormField";
 import { loginWithEmail } from "../services/authService";
@@ -34,15 +35,18 @@ export function LoginPage() {
 
   return (
     <AuthLayout
-      title="Sign in"
-      subtitle="Use your school MIS account to continue."
+      backgroundImage="/login-background.png"
+      title="Welcome Back!"
+      subtitle="Sign in to continue to MSHS Portal."
     >
-      <form className="space-y-5" onSubmit={handleSubmit}>
+      <form className="space-y-6" onSubmit={handleSubmit}>
         <TextField
           autoComplete="email"
           id="email"
+          icon={<Mail size={18} />}
           label="Email"
           onChange={(event) => setEmail(event.target.value)}
+          placeholder="Enter your email"
           required
           type="email"
           value={email}
@@ -50,24 +54,31 @@ export function LoginPage() {
         <TextField
           autoComplete="current-password"
           id="password"
+          icon={<Lock size={18} />}
           label="Password"
           onChange={(event) => setPassword(event.target.value)}
+          placeholder="Enter your password"
           required
           type="password"
           value={password}
         />
-        <div className="flex items-center justify-between text-sm">
+        <div className="flex justify-end text-sm">
           <Link className="font-medium text-civic hover:underline" to="/forgot-password">
             Forgot password?
           </Link>
         </div>
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        {error && (
+          <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+            {error}
+          </p>
+        )}
         <button
-          className="h-11 w-full rounded-md bg-civic px-4 text-sm font-semibold text-white transition hover:bg-civic/90 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-wine to-civic px-4 text-sm font-bold text-white shadow-xl shadow-red-950/20 transition hover:-translate-y-0.5 hover:from-[#560000] hover:to-[#b20000] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
           disabled={submitting}
           type="submit"
         >
-          {submitting ? "Signing in..." : "Login"}
+          {submitting ? "Signing in..." : "Sign In"}
+          {!submitting ? <ArrowRight size={18} /> : null}
         </button>
       </form>
       <p className="mt-6 text-center text-sm text-slate-600">

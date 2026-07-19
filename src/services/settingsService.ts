@@ -1,7 +1,15 @@
 import { doc, onSnapshot, serverTimestamp, setDoc, type Unsubscribe } from "firebase/firestore";
 import { db } from "../firebase";
-import type { ScheduleBreak, SchedulePrintSettings, ScheduleTimeSlot } from "../types/loading";
+import {
+  defaultSchoolYear,
+  defaultTerm,
+  type AcademicSettings,
+  type ScheduleBreak,
+  type SchedulePrintSettings,
+  type ScheduleTimeSlot,
+} from "../types/loading";
 
+const academicSettingsRef = doc(db, "appSettings", "academic");
 const schedulePrintSettingsRef = doc(db, "appSettings", "schedulePrint");
 
 const grade11AcademicSlots: ScheduleTimeSlot[] = [
@@ -59,6 +67,21 @@ export const defaultSchedulePrintSettings: SchedulePrintSettings = {
     grade12: grade12Breaks,
   },
 };
+
+export const defaultAcademicSettings: AcademicSettings = {
+  currentSchoolYear: defaultSchoolYear,
+  currentTerm: defaultTerm,
+  hideInactiveDashboardCards: false,
+};
+
+function withAcademicDefaults(settings?: Partial<AcademicSettings>): AcademicSettings {
+  return {
+    currentSchoolYear: settings?.currentSchoolYear || defaultAcademicSettings.currentSchoolYear,
+    currentTerm: settings?.currentTerm || defaultAcademicSettings.currentTerm,
+    hideInactiveDashboardCards: settings?.hideInactiveDashboardCards ?? defaultAcademicSettings.hideInactiveDashboardCards,
+    updatedAt: settings?.updatedAt,
+  };
+}
 
 function withSlotDefaults(
   slots: Partial<SchedulePrintSettings>["scheduleTimeSlots"],
@@ -126,6 +149,27 @@ export function subscribeSchedulePrintSettings(
   return onSnapshot(schedulePrintSettingsRef, (snapshot) => {
     callback(withDefaults(snapshot.exists() ? (snapshot.data() as SchedulePrintSettings) : undefined));
   });
+}
+
+export function subscribeAcademicSettings(
+  callback: (settings: AcademicSettings) => void,
+): Unsubscribe {
+  return onSnapshot(academicSettingsRef, (snapshot) => {
+    callback(withAcademicDefaults(snapshot.exists() ? (snapshot.data() as AcademicSettings) : undefined));
+  });
+}
+
+export async function saveAcademicSettings(settings: AcademicSettings) {
+  await setDoc(
+    academicSettingsRef,
+    {
+      currentSchoolYear: settings.currentSchoolYear,
+      currentTerm: settings.currentTerm,
+      hideInactiveDashboardCards: settings.hideInactiveDashboardCards ?? false,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }
 
 export async function saveSchedulePrintSettings(settings: SchedulePrintSettings) {

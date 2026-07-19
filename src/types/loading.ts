@@ -17,6 +17,16 @@ export type ScheduleDay = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Fri
 export type DllRequestStatus = "active" | "closed";
 export type DllSubmissionType = "soft_copy" | "hard_copy";
 export type DllSubmissionStatus = "submitted" | "approved" | "returned";
+export type DocumentRequestStatus = "active" | "closed";
+export type DocumentRequestType = "soft_copy" | "hard_copy" | "both";
+export type DocumentRequestSubmissionStatus = "submitted" | "confirmed" | "returned";
+export type MpsRequestStatus = "active" | "closed";
+export type ObservationActivityType = "classroom_observation" | "coaching_mentoring";
+export type ClassroomObservationType = "Formal (CO)" | "Informal (ICO)" | "Walkthrough" | "Other";
+export type ObservationStatus = "scheduled" | "done" | "cancelled";
+export type PersonnelStaffType = "teaching" | "non_teaching";
+export type PersonnelAttendanceStatus = "present" | "absent" | "official_business";
+export type EnrollmentStatus = "enrolled" | "transferred" | "dropped";
 
 export type Teacher = {
   teacherId: string;
@@ -35,6 +45,8 @@ export type Subject = {
   subjectName: string;
   category: SubjectCategory;
   units: number;
+  loadHours?: number;
+  subjectUnits?: number;
   hoursPerSession?: number;
   gradeLevel: string;
   strand: string;
@@ -69,6 +81,58 @@ export type CurriculumMapping = {
   updatedAt?: Timestamp;
 };
 
+export type EnrollmentStudent = {
+  enrollmentId: string;
+  lrn: string;
+  displayName: string;
+  lastName: string;
+  firstName: string;
+  middleName?: string;
+  sex?: string;
+  age?: number;
+  birthDate?: string;
+  shsAdmissionDate?: string;
+  completedLevel?: string;
+  completionDate?: string;
+  jhsGeneralAverage?: string;
+  oldHsGeneralAverage?: string;
+  peptRating?: string;
+  alsRating?: string;
+  assessmentDate?: string;
+  learningCenter?: string;
+  previousSchoolName?: string;
+  previousSchoolAddress?: string;
+  eligibilityNotes?: string;
+  schoolYear: string;
+  gradeLevel: string;
+  strand: string;
+  sectionId: string;
+  sectionName: string;
+  status: EnrollmentStatus;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type ClassEnrollment = {
+  classEnrollmentId: string;
+  enrollmentId: string;
+  lrn: string;
+  studentName: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  gradeLevel: string;
+  strand: string;
+  sectionId: string;
+  sectionName: string;
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
+  teacherId?: string;
+  status: EnrollmentStatus;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
 export type LoadAssignment = {
   assignmentId: string;
   schoolYear: string;
@@ -79,6 +143,7 @@ export type LoadAssignment = {
   sectionId: string;
   teacherId: string;
   units: number;
+  loadHours?: number;
   hoursPerSession?: number;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -129,6 +194,7 @@ export type AncillaryLoad = {
   schoolYear: string;
   ancillary: string;
   units: number;
+  loadHours?: number;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };
@@ -172,10 +238,18 @@ export type SchedulePrintSettings = {
   updatedAt?: Timestamp;
 };
 
+export type AcademicSettings = {
+  currentSchoolYear: string;
+  currentTerm: AcademicTerm;
+  hideInactiveDashboardCards?: boolean;
+  updatedAt?: Timestamp;
+};
+
 export type DllRequest = {
   requestId: string;
   title: string;
   schoolYear: string;
+  term?: AcademicTerm;
   weekLabel: string;
   weekStart: string;
   weekEnd: string;
@@ -190,6 +264,8 @@ export type DllRequest = {
 export type DllSubmission = {
   submissionId: string;
   requestId: string;
+  schoolYear?: string;
+  term?: AcademicTerm;
   teacherId: string;
   teacherName: string;
   subjectId: string;
@@ -197,6 +273,7 @@ export type DllSubmission = {
   submittedBy: string;
   submissionType: DllSubmissionType;
   link?: string;
+  submittedTo?: string;
   status: DllSubmissionStatus;
   remarks?: string;
   reviewedBy?: string;
@@ -204,6 +281,163 @@ export type DllSubmission = {
   reviewedAt?: Timestamp;
   submittedAt?: Timestamp;
   archived?: boolean;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type DocumentRequest = {
+  requestId: string;
+  title: string;
+  description: string;
+  dueDate: string;
+  requestType: DocumentRequestType;
+  status: DocumentRequestStatus;
+  targetUserIds: string[];
+  targetGroup: "manual" | "all_personnel" | "all_teachers" | "all_admin";
+  createdBy: string;
+  creatorName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type DocumentRequestSubmission = {
+  submissionId: string;
+  requestId: string;
+  requestTitle: string;
+  targetUserId: string;
+  targetName: string;
+  submittedBy: string;
+  submissionType: DocumentRequestType;
+  link?: string;
+  hardCopyNote?: string;
+  status: DocumentRequestSubmissionStatus;
+  remarks?: string;
+  confirmedBy?: string;
+  confirmerName?: string;
+  submittedAt?: Timestamp;
+  confirmedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type PersonnelAttendanceRecord = {
+  attendanceId: string;
+  attendanceDate: string;
+  staffType: PersonnelStaffType;
+  staffId: string;
+  staffName: string;
+  roleOrPosition: string;
+  status: PersonnelAttendanceStatus;
+  remarks: string;
+  recordedBy: string;
+  recorderName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type PersonnelCreditBalance = {
+  creditId: string;
+  staffId: string;
+  staffName: string;
+  staffType: PersonnelStaffType;
+  roleOrPosition: string;
+  specialOrderServiceCredit: number;
+  localServiceCredit: number;
+  wellnessBreak: number;
+  leaveCredits: number;
+  remarks?: string;
+  updatedBy: string;
+  updaterName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type ObservationSchedule = {
+  observationId: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  teacherId: string;
+  teacherName: string;
+  observerId: string;
+  observerName: string;
+  observerRole?: string;
+  activityType: ObservationActivityType;
+  observationType?: ClassroomObservationType;
+  scheduleDate: string;
+  day: ScheduleDay;
+  startTime: string;
+  endTime: string;
+  subjectId?: string;
+  subjectName?: string;
+  sectionId?: string;
+  sectionName?: string;
+  room?: string;
+  notes?: string;
+  status: ObservationStatus;
+  completedAt?: Timestamp;
+  createdBy: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type MpsRequest = {
+  requestId: string;
+  title: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  testName: string;
+  dueDate: string;
+  instructions?: string;
+  status: MpsRequestStatus;
+  createdBy: string;
+  creatorName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type MpsSubmission = {
+  submissionId: string;
+  requestId: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  teacherId: string;
+  teacherName: string;
+  subjectId: string;
+  subjectName: string;
+  sectionId: string;
+  sectionName: string;
+  gradeLevel: string;
+  strand: string;
+  mps: number;
+  leastMasteredCompetency: string;
+  plannedIntervention: string;
+  submittedBy: string;
+  submittedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type GradeSubmission = {
+  gradeSubmissionId: string;
+  assignmentId: string;
+  classEnrollmentId: string;
+  enrollmentId: string;
+  lrn: string;
+  studentName: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  teacherId: string;
+  teacherName: string;
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
+  sectionId: string;
+  sectionName: string;
+  gradeLevel: string;
+  strand: string;
+  grade: number;
+  submittedBy: string;
+  submittedAt?: Timestamp;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };

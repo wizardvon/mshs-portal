@@ -132,13 +132,16 @@ export async function archiveAllDllSubmissions() {
 }
 
 export async function deleteAllDllSubmissions() {
-  const snapshot = await getDocs(collection(db, "dllSubmissions"));
+  const [submissionSnapshot, requestSnapshot] = await Promise.all([
+    getDocs(collection(db, "dllSubmissions")),
+    getDocs(collection(db, "dllRequests")),
+  ]);
   const batches = [];
   let batch = writeBatch(db);
   let operationCount = 0;
 
-  snapshot.docs.forEach((submissionDoc) => {
-    batch.delete(submissionDoc.ref);
+  const queueDelete = (documentRef: (typeof submissionSnapshot.docs)[number]["ref"]) => {
+    batch.delete(documentRef);
     operationCount += 1;
 
     if (operationCount === 500) {
@@ -146,12 +149,18 @@ export async function deleteAllDllSubmissions() {
       batch = writeBatch(db);
       operationCount = 0;
     }
-  });
+  };
+
+  submissionSnapshot.docs.forEach((submissionDoc) => queueDelete(submissionDoc.ref));
+  requestSnapshot.docs.forEach((requestDoc) => queueDelete(requestDoc.ref));
 
   if (operationCount > 0) {
     batches.push(batch.commit());
   }
 
   await Promise.all(batches);
-  return snapshot.size;
+  return {
+    requestCount: requestSnapshot.size,
+    submissionCount: submissionSnapshot.size,
+  };
 }

@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import type { CurriculumMapping, LoadAssignment, Section, Subject } from "../types/loading";
+import { getLoadHours, withLegacyUnits } from "../utils/loadHours";
 import { subscribeCollection } from "./firestoreCrud";
 
 const firestoreBatchLimit = 450;
@@ -71,9 +72,11 @@ export async function saveLoadAssignment(
     assignment.sectionId,
   );
   const { hoursPerSession, ...requiredAssignment } = assignment;
+  const loadHours = getLoadHours(assignment);
   const normalizedHoursPerSession = Number(hoursPerSession || 0);
   const assignmentData = {
     ...requiredAssignment,
+    ...withLegacyUnits(loadHours),
     assignmentId,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -152,10 +155,11 @@ export async function syncLoadAssignmentsForPeriod({
       }
 
       const normalizedHoursPerSession = Number(subject.hoursPerSession || 0);
+      const loadHours = getLoadHours(subject);
       const syncedAssignment = {
         gradeLevel: section.gradeLevel,
         strand: section.strand,
-        units: Number(subject.units || 0),
+        ...withLegacyUnits(loadHours),
         updatedAt: serverTimestamp(),
         hoursPerSession:
           normalizedHoursPerSession > 0 ? normalizedHoursPerSession : deleteField(),
@@ -163,7 +167,7 @@ export async function syncLoadAssignmentsForPeriod({
       const alreadySynced =
         assignment.gradeLevel === syncedAssignment.gradeLevel &&
         assignment.strand === syncedAssignment.strand &&
-        Number(assignment.units || 0) === syncedAssignment.units &&
+        getLoadHours(assignment) === loadHours &&
         Number(assignment.hoursPerSession || 0) === normalizedHoursPerSession;
 
       if (alreadySynced) return;

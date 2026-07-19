@@ -11,6 +11,7 @@ import { subscribeSections } from "../services/sectionService";
 import { subscribeSubjects } from "../services/subjectService";
 import type { AcademicTerm, CurriculumMapping, Section, Subject } from "../types/loading";
 import { defaultSchoolYear, defaultTerm, subjectCategories, termOptions } from "../types/loading";
+import { getLoadHours } from "../utils/loadHours";
 
 export function CurriculumMappingPage() {
   const { profile } = useAuth();
@@ -203,7 +204,7 @@ export function CurriculumMappingPage() {
                                 {subject.subjectName}
                               </span>
                               <span className="block text-xs text-slate-500">
-                                {subject.subjectCode} - {subject.units} units
+                                {subject.subjectCode} - {getLoadHours(subject)} hours
                               </span>
                             </span>
                           </button>

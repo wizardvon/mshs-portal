@@ -15,6 +15,7 @@ import {
   requireText,
   type ImportColumn,
 } from "../utils/excelImport";
+import { getLoadHours } from "../utils/loadHours";
 import { printTable } from "../utils/printTable";
 
 function getSubjectHoursPerSession(subject: Pick<Subject, "hoursPerSession">) {
@@ -22,11 +23,15 @@ function getSubjectHoursPerSession(subject: Pick<Subject, "hoursPerSession">) {
   return hoursPerSession > 0 ? hoursPerSession : null;
 }
 
-function getSubjectWeeklySessions(subject: Pick<Subject, "units" | "hoursPerSession">) {
-  const units = Number(subject.units || 0);
+function getSubjectWeeklySessions(subject: Pick<Subject, "units" | "loadHours" | "hoursPerSession">) {
+  const loadHours = getLoadHours(subject);
   const hoursPerSession = getSubjectHoursPerSession(subject);
   if (!hoursPerSession) return "Default rules";
-  return units > 0 ? Math.ceil(units / hoursPerSession) : 0;
+  return loadHours > 0 ? Math.ceil(loadHours / hoursPerSession) : 0;
+}
+
+function getSubjectUnits(subject: Pick<Subject, "subjectUnits">) {
+  return Number(subject.subjectUnits || 0);
 }
 
 const emptySubject = {
@@ -34,6 +39,7 @@ const emptySubject = {
   subjectName: "",
   category: "Core Subjects" as SubjectCategory,
   units: 3,
+  subjectUnits: 0,
   hoursPerSession: 1.5,
   gradeLevel: "11",
   strand: "All",
@@ -76,6 +82,7 @@ export function SubjectsPage() {
           subject.strand,
           subject.term,
           subject.status,
+          subject.subjectUnits,
         ]
           .join(" ")
           .toLowerCase()
@@ -99,8 +106,11 @@ export function SubjectsPage() {
             `${second.category} ${second.subjectCode}`,
           );
         }
-        if (sortBy === "units") {
-          return first.units - second.units || first.subjectCode.localeCompare(second.subjectCode);
+        if (sortBy === "loadHours") {
+          return getLoadHours(first) - getLoadHours(second) || first.subjectCode.localeCompare(second.subjectCode);
+        }
+        if (sortBy === "subjectUnits") {
+          return getSubjectUnits(first) - getSubjectUnits(second) || first.subjectCode.localeCompare(second.subjectCode);
         }
         if (sortBy === "gradeLevel") {
           return `${first.gradeLevel} ${first.strand} ${first.subjectCode}`.localeCompare(
@@ -133,7 +143,8 @@ export function SubjectsPage() {
       subjectCode: subject.subjectCode,
       subjectName: subject.subjectName,
       category: subject.category,
-      units: subject.units,
+      units: getLoadHours(subject),
+      subjectUnits: getSubjectUnits(subject),
       hoursPerSession: getSubjectHoursPerSession(subject) ?? 1.5,
       gradeLevel: subject.gradeLevel,
       strand: subject.strand,
@@ -164,7 +175,8 @@ export function SubjectsPage() {
         { header: "Code", getValue: (subject) => subject.subjectCode },
         { header: "Subject", getValue: (subject) => subject.subjectName },
         { header: "Category", getValue: (subject) => subject.category },
-        { header: "Units", getValue: (subject) => subject.units },
+        { header: "Hours", getValue: (subject) => getLoadHours(subject) },
+        { header: "Units", getValue: (subject) => getSubjectUnits(subject) },
         { header: "Hours / Session", getValue: (subject) => getSubjectHoursPerSession(subject) ?? "Default rules" },
         { header: "Weekly Sessions", getValue: (subject) => getSubjectWeeklySessions(subject) },
         {
@@ -181,7 +193,8 @@ export function SubjectsPage() {
     { key: "subjectCode", label: "subjectCode", required: true },
     { key: "subjectName", label: "subjectName", required: true },
     { key: "category", label: "category", required: true },
-    { key: "units", label: "units", required: true },
+    { key: "loadHours", label: "hours", required: true },
+    { key: "subjectUnits", label: "units" },
     { key: "hoursPerSession", label: "hoursPerSession" },
     { key: "gradeLevel", label: "gradeLevel", required: true },
     { key: "strand", label: "strand", required: true },
@@ -193,7 +206,8 @@ export function SubjectsPage() {
     { header: "Code", render: (subject) => <span className="font-semibold text-slate-950">{subject.subjectCode}</span> },
     { header: "Subject", render: (subject) => subject.subjectName },
     { header: "Category", render: (subject) => subject.category },
-    { header: "Units", render: (subject) => subject.units },
+    { header: "Hours", render: (subject) => getLoadHours(subject) },
+    { header: "Units", render: (subject) => getSubjectUnits(subject) },
     { header: "Hours / Session", render: (subject) => getSubjectHoursPerSession(subject) ?? "Default rules" },
     { header: "Sessions / Week", render: (subject) => getSubjectWeeklySessions(subject) },
     { header: "Grade / Strand", render: (subject) => `G${subject.gradeLevel} - ${subject.strand}` },
@@ -222,14 +236,14 @@ export function SubjectsPage() {
             {canEdit && <button className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700" onClick={startCreate} type="button"><Plus size={16} /> Add Subject</button>}
           </>
         }
-        description="Maintain subject offerings, categories, units, strands, and terms."
+        description="Maintain subject offerings, categories, hours, units, strands, and terms."
         title="Subjects"
       />
       {canEdit && (
         <div className="mb-5">
           <ExcelImportButton
             columns={importColumns}
-            formatNote='Accepted files: .xlsx, .xls, .csv. First sheet headers: subjectCode, subjectName, category, units, hoursPerSession, gradeLevel, strand, term, status. Category must be one of: Core Subjects; Applied / Specialized Subjects; Track / Strand Subjects; Electives / Others. hoursPerSession and status are optional.'
+            formatNote='Accepted files: .xlsx, .xls, .csv. First sheet headers: subjectCode, subjectName, category, hours, units, hoursPerSession, gradeLevel, strand, term, status. Category must be one of: Core Subjects; Applied / Specialized Subjects; Track / Strand Subjects; Electives / Others. units, hoursPerSession, and status are optional.'
             onImport={importSubjects}
             transform={(row, rowNumber) => {
               const category = requireText(row.category, rowNumber, "category") as SubjectCategory;
@@ -244,7 +258,10 @@ export function SubjectsPage() {
                 subjectCode: requireText(row.subjectCode, rowNumber, "subjectCode"),
                 subjectName: requireText(row.subjectName, rowNumber, "subjectName"),
                 category,
-                units: requireNumber(row.units, rowNumber, "units"),
+                units: requireNumber(row.loadHours, rowNumber, "hours"),
+                subjectUnits: row.subjectUnits
+                  ? requireNumber(row.subjectUnits, rowNumber, "units")
+                  : 0,
                 hoursPerSession: row.hoursPerSession
                   ? requireNumber(row.hoursPerSession, rowNumber, "hoursPerSession")
                   : 1.5,
@@ -286,7 +303,8 @@ export function SubjectsPage() {
             <option value="subjectCode">Sort by code</option>
             <option value="subjectName">Sort by subject</option>
             <option value="category">Sort by category</option>
-            <option value="units">Sort by units</option>
+            <option value="loadHours">Sort by hours</option>
+            <option value="subjectUnits">Sort by units</option>
             <option value="gradeLevel">Sort by grade</option>
             <option value="term">Sort by term</option>
             <option value="status">Sort by status</option>
@@ -304,7 +322,8 @@ export function SubjectsPage() {
           <select className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setForm({ ...form, category: event.target.value as SubjectCategory })} value={form.category}>
             {subjectCategories.map((category) => <option key={category} value={category}>{category}</option>)}
           </select>
-          <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setForm({ ...form, units: Number(event.target.value) })} placeholder="Units" step="0.5" type="number" value={form.units} />
+          <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setForm({ ...form, units: Number(event.target.value) })} placeholder="Hours" step="0.5" type="number" value={form.units} />
+          <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setForm({ ...form, subjectUnits: Number(event.target.value) })} placeholder="Units" step="0.5" type="number" value={form.subjectUnits} />
           <input className="h-11 rounded-md border border-slate-300 px-3" min={0.5} onChange={(event) => setForm({ ...form, hoursPerSession: Number(event.target.value) })} placeholder="Hours per session" step="0.5" type="number" value={form.hoursPerSession} />
           <select className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setForm({ ...form, gradeLevel: event.target.value })} value={form.gradeLevel}>
             <option value="11">Grade 11</option>

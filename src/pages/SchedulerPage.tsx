@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronLeft, ChevronRight, GripVertical, Lock, Pencil, Plus, Printer, RefreshCw, Trash2, Unlock, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, GripVertical, Lock, Pencil, Plus, Printer, RefreshCw, Save, Trash2, Unlock, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/common/PageHeader";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -7,13 +7,9 @@ import { subscribeAncillaryLoads } from "../services/ancillaryLoadService";
 import { subscribeLoadAssignmentsByPeriod, syncLoadAssignmentsForPeriod } from "../services/assignmentService";
 import { subscribeCurriculumMappings } from "../services/curriculumService";
 import {
-  deleteSavedSchedule,
   replaceSchedulesByPeriod,
   resetSchedulesByContextSafely,
-  saveScheduleEntry,
-  saveNamedSchedule,
   subscribeClassSchedulesByPeriod,
-  subscribeSavedSchedulesByContext,
 } from "../services/scheduleService";
 import {
   defaultSchedulePrintSettings,
@@ -34,13 +30,13 @@ import type {
   SchedulePrintSettings,
   ScheduleTemplateKey,
   ScheduleTimeSlot,
-  SavedSchedule,
   ScheduleDay,
   Section,
   Subject,
   Teacher,
 } from "../types/loading";
 import { defaultSchoolYear, defaultTerm, termOptions } from "../types/loading";
+import { getLoadHours } from "../utils/loadHours";
 
 type ViewMode = "section" | "teacher";
 type GenerationMode = "fast" | "best";
@@ -377,7 +373,7 @@ function isFixedTechProAssignment(assignment: JoinedAssignment) {
 }
 
 function getJoinedAssignmentUnits(assignment: JoinedAssignment) {
-  return Number(assignment.subject.units ?? assignment.units ?? 0);
+  return getLoadHours(assignment.subject) || getLoadHours(assignment);
 }
 
 function getJoinedAssignmentHoursPerSession(assignment: JoinedAssignment) {
@@ -656,7 +652,7 @@ function buildRequiredSessions(assignments: JoinedAssignment[], lockedEntries: C
           subjectName: assignment.subject.subjectName,
           sectionName: assignment.section.sectionName,
           teacherName: assignment.teacher.fullName,
-          reason: "No compatible time slot exists for this subject's required duration. Check the section template or subject units.",
+          reason: "No compatible time slot exists for this subject's required duration. Check the section template or subject hours.",
           sessions: rule.sessions - lockedCount,
         });
       }
@@ -704,7 +700,7 @@ function buildRemainingSessions(assignments: JoinedAssignment[], existingEntries
           subjectName: assignment.subject.subjectName,
           sectionName: assignment.section.sectionName,
           teacherName: assignment.teacher.fullName,
-          reason: "No compatible time slot exists for this subject's required duration. Check the section template or subject units.",
+          reason: "No compatible time slot exists for this subject's required duration. Check the section template or subject hours.",
           sessions: rule.sessions - existingCount,
         });
       }
@@ -1036,7 +1032,7 @@ function scoreSchedule(
       score += 500;
     }
     const assignment = requiredByAssignmentId.get(entry.sourceAssignmentId);
-    const units = Number(assignment?.units || assignment?.subject.units || 0);
+    const units = assignment ? getJoinedAssignmentUnits(assignment) : 0;
     if (
       units === 12.5 &&
       getTemplateType(assignment?.section, entry.gradeLevel) === "grade11_techpro"
@@ -1719,7 +1715,7 @@ function runFeasibilityCheck(assignments: JoinedAssignment[], lockedEntries: Cla
     grouped.forEach((matches) => {
       if (matches.length < 2) return;
       errors.push(
-        `Grade 11 Tech Pro 12.5-unit subjects share the fixed 2:00-4:30 slot for the same ${group.label} (${group.getName(matches[0])}): ${matches.map((assignment) => `${assignment.subject.subjectName} - ${assignment.section.sectionName}`).join(", ")}.`,
+        `Grade 11 Tech Pro 12.5-hour subjects share the fixed 2:00-4:30 slot for the same ${group.label} (${group.getName(matches[0])}): ${matches.map((assignment) => `${assignment.subject.subjectName} - ${assignment.section.sectionName}`).join(", ")}.`,
       );
     });
   });
@@ -1912,7 +1908,7 @@ function SummaryCard({ label, value, detail }: { label: string; value: number | 
 }
 
 export function SchedulerPage() {
-  const { profile, user } = useAuth();
+  const { profile } = useAuth();
   const canEdit = profile?.role === "super_admin" || profile?.role === "admin";
   const scopedTeacherId = profile?.role === "teacher" ? profile.assignedTeacherId : "";
   const scopedAdvisingSectionId = profile?.role === "teacher" ? profile.advisingSectionId : "";
@@ -1930,13 +1926,11 @@ export function SchedulerPage() {
   const [curriculumMappings, setCurriculumMappings] = useState<CurriculumMapping[]>([]);
   const [ancillaryLoads, setAncillaryLoads] = useState<AncillaryLoad[]>([]);
   const [savedEntries, setSavedEntries] = useState<ClassScheduleEntry[]>([]);
-  const [savedSchedules, setSavedSchedules] = useState<SavedSchedule[]>([]);
   const [schedulePrintSettings, setSchedulePrintSettings] = useState<SchedulePrintSettings>(
     defaultSchedulePrintSettings,
   );
-  const [selectedSavedScheduleId, setSelectedSavedScheduleId] = useState("");
-  const [scheduleName, setScheduleName] = useState("");
   const [draftEntries, setDraftEntries] = useState<ClassScheduleEntry[]>([]);
+  const [hasDraftChanges, setHasDraftChanges] = useState(false);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [saveMessage, setSaveMessage] = useState("");
   const [generationMessage, setGenerationMessage] = useState("");
@@ -2006,22 +2000,12 @@ export function SchedulerPage() {
       }),
     [gradeLevel, schoolYear, term],
   );
-  useEffect(
-    () =>
-      subscribeSavedSchedulesByContext(
-        schoolYear,
-        term,
-        gradeLevel,
-        strandFilter,
-        setSavedSchedules,
-      ),
-    [gradeLevel, schoolYear, strandFilter, term],
-  );
   useEffect(() => {
     scheduleContextKeyRef.current = scheduleContextKey;
     latestSaveRunRef.current += 1;
     hasAutoRestoredDraftRef.current = "";
     setDraftEntries([]);
+    setHasDraftChanges(false);
     setConflicts([]);
     setSaveMessage("");
     setIsSaving(false);
@@ -2037,8 +2021,6 @@ export function SchedulerPage() {
     setEditingRoomScheduleId(null);
     setRoomDraft("");
     setSelectedTeacherId("");
-    setSelectedSavedScheduleId("");
-    setScheduleName("");
     setShowResetConfirmation(false);
     setResetConfirmation("");
     setPendingLocalDraft(loadLocalScheduleDraft(draftStorageKey));
@@ -2130,17 +2112,10 @@ export function SchedulerPage() {
     [assignments, gradeLevel, schoolYear, sectionsById, strandFilter, subjectsById, teachersById, term],
   );
 
-  const visibleEntries = draftEntries.length > 0 ? draftEntries : savedEntries;
+  const visibleEntries = hasDraftChanges ? draftEntries : savedEntries;
   const unlockedScheduleCount = useMemo(
     () => visibleEntries.filter((entry) => !entry.locked).length,
     [visibleEntries],
-  );
-  const selectedSavedSchedule = useMemo(
-    () =>
-      savedSchedules.find(
-        (savedSchedule) => savedSchedule.savedScheduleId === selectedSavedScheduleId,
-      ),
-    [savedSchedules, selectedSavedScheduleId],
   );
   const actionableConflicts = useMemo(
     () => conflicts.filter((conflict) => conflict.type !== "score"),
@@ -2501,7 +2476,7 @@ export function SchedulerPage() {
               bestFitMaxCombinations,
               (progress) => {
                 setDraftEntries(progress.entries);
-                setSavedEntries(progress.entries);
+                setHasDraftChanges(true);
                 saveLocalDraft({
                   entries: progress.entries,
                   nextGenerationMessage: "Trying best fit combinations...",
@@ -2524,7 +2499,7 @@ export function SchedulerPage() {
           : generateScheduleFastDraft(joinedAssignments, lockedEntries);
 
       setDraftEntries(result.entries);
-      setSavedEntries(result.entries);
+      setHasDraftChanges(true);
       setRecentlyChangedScheduleIds(new Set(result.entries.map((entry) => entry.scheduleId)));
       setPlacementLog(result.entries.slice(-12).reverse());
       setConflicts(result.conflicts);
@@ -2540,7 +2515,7 @@ export function SchedulerPage() {
             ? "Best partial schedule found"
             : "Schedule generated successfully.";
       setGenerationMessage(finalGenerationMessage);
-      void autoSaveSchedule(result.entries, "Saved to cloud", {
+      updateDraftSchedule(result.entries, {
         nextConflicts: result.conflicts,
         nextGenerationMessage: finalGenerationMessage,
         nextOptimizationScore: result.score,
@@ -2576,8 +2551,6 @@ export function SchedulerPage() {
     nextCompletionPercent?: number | null;
     nextGenerationProgress?: GenerationProgress | null;
   }) {
-    if (entries.length === 0 && nextConflicts.length === 0) return;
-
     const draft: LocalScheduleDraft = {
       entries: entries.map(cleanEntryForLocalDraft),
       conflicts: nextConflicts,
@@ -2602,6 +2575,7 @@ export function SchedulerPage() {
   function restoreLocalDraft(draft: LocalScheduleDraft, recovered: boolean) {
     hasAutoRestoredDraftRef.current = draftStorageKey;
     setDraftEntries(draft.entries);
+    setHasDraftChanges(true);
     setConflicts(draft.conflicts);
     setGenerationMessage(draft.generationMessage);
     setOptimizationScore(draft.optimizationScore);
@@ -2613,21 +2587,34 @@ export function SchedulerPage() {
     setSaveMessage(recovered ? "Recovered local draft from previous session" : draft.saveMessage || "Local draft saved");
   }
 
-  function autoSaveSchedule(
+  function updateDraftSchedule(
     entries: ClassScheduleEntry[],
-    successMessage = "Schedule auto-saved. You can continue fixing it later.",
     draftOptions: Omit<Parameters<typeof saveLocalDraft>[0], "entries" | "saveStatus"> = {},
   ) {
     const entriesSnapshot = entries.map((entry) => ({ ...entry }));
-    saveLocalDraft({ entries: entriesSnapshot, ...draftOptions });
+    setDraftEntries(entriesSnapshot);
+    setHasDraftChanges(true);
+    saveLocalDraft({
+      entries: entriesSnapshot,
+      saveStatus: "Draft updated. Click Save to update the current schedule.",
+      ...draftOptions,
+    });
+  }
 
-    if (!canEdit || entries.length === 0) return Promise.resolve();
+  async function handleSaveCurrentSchedule() {
+    if (!canEdit || isGenerating || isSaving) return;
+
+    const entriesSnapshot = visibleEntries.map(cleanEntryForLocalDraft);
+    if (entriesSnapshot.length === 0) {
+      setSaveMessage("Load or plot a schedule before saving.");
+      return;
+    }
 
     const contextKey = scheduleContextKey;
     const saveRun = latestSaveRunRef.current + 1;
     latestSaveRunRef.current = saveRun;
     setIsSaving(true);
-    setSaveMessage("Saving to cloud...");
+    setSaveMessage("Saving current schedule...");
 
     const saveJob = saveQueueRef.current
       .catch(() => undefined)
@@ -2637,9 +2624,10 @@ export function SchedulerPage() {
         if (latestSaveRunRef.current === saveRun && scheduleContextKeyRef.current === contextKey) {
           setSavedEntries(entriesSnapshot);
           setDraftEntries([]);
+          setHasDraftChanges(false);
           removeLocalScheduleDraft(draftStorageKey);
           setPendingLocalDraft(null);
-          setSaveMessage(successMessage === "Saved to cloud" ? successMessage : "Saved to cloud");
+          setSaveMessage("Current schedule saved.");
         }
       })
       .catch((error) => {
@@ -2648,95 +2636,21 @@ export function SchedulerPage() {
           saveLocalDraft({
             entries: entriesSnapshot,
             saveStatus: "Cloud save failed, local draft preserved",
-            ...draftOptions,
           });
           setSaveMessage("Cloud save failed, local draft preserved");
         }
       })
       .finally(() => {
-        if (latestSaveRunRef.current === saveRun && scheduleContextKeyRef.current === contextKey) {
-          setIsSaving(false);
-        }
+        setIsSaving(false);
       });
 
     saveQueueRef.current = saveJob;
     return saveJob;
   }
 
-  async function handleSaveNamedSchedule() {
-    const trimmedName = scheduleName.trim();
-    if (!canEdit || isGenerating || isSaving) return;
-    if (!trimmedName) {
-      setSaveMessage("Enter a schedule name before saving.");
-      return;
-    }
-    if (visibleEntries.length === 0) {
-      setSaveMessage("Load or plot a schedule before saving a named copy.");
-      return;
-    }
-
-    setIsSaving(true);
-    setSaveMessage("Saving named schedule...");
-
-    try {
-      await saveNamedSchedule(
-        trimmedName,
-        schoolYear,
-        term,
-        gradeLevel,
-        strandFilter,
-        visibleEntries.map(cleanEntryForLocalDraft),
-        user?.uid,
-      );
-      setScheduleName("");
-      setSaveMessage(`Saved schedule "${trimmedName}".`);
-    } catch (error) {
-      console.error(error);
-      setSaveMessage("Named schedule save failed.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function handleLoadNamedSchedule() {
-    if (!canEdit || isGenerating || isSaving || !selectedSavedSchedule) return;
-
-    setIsSaving(true);
-    setSaveMessage(`Loading "${selectedSavedSchedule.name}"...`);
-
-    try {
-      await replaceSchedulesByPeriod(
-        schoolYear,
-        term,
-        gradeLevel,
-        strandFilter,
-        selectedSavedSchedule.entries.map(cleanEntryForLocalDraft),
-        { includeLocked: true },
-      );
-      setDraftEntries([]);
-      setSavedEntries(selectedSavedSchedule.entries.map(cleanEntryForLocalDraft));
-      setConflicts([]);
-      setGenerationMessage("");
-      setOptimizationScore(null);
-      setCompletionPercent(null);
-      setGenerationProgress(null);
-      setRecentlyChangedScheduleIds(
-        new Set(selectedSavedSchedule.entries.map((entry) => entry.scheduleId)),
-      );
-      setPlacementLog([]);
-      removeLocalScheduleDraft(draftStorageKey);
-      setPendingLocalDraft(null);
-      setSaveMessage(`Loaded schedule "${selectedSavedSchedule.name}".`);
-    } catch (error) {
-      console.error(error);
-      setSaveMessage("Saved schedule load failed.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   function handleClearDraft() {
     setDraftEntries([]);
+    setHasDraftChanges(false);
     setConflicts([]);
     setSaveMessage("");
     setGenerationMessage("");
@@ -2751,7 +2665,7 @@ export function SchedulerPage() {
     removeLocalScheduleDraft(draftStorageKey);
   }
 
-  async function handleClearUnlockedSchedule() {
+  function handleClearUnlockedSchedule() {
     if (!canEdit || isGenerating || isSaving) return;
 
     const unlockedEntries = visibleEntries.filter((entry) => !entry.locked);
@@ -2780,37 +2694,29 @@ export function SchedulerPage() {
       [],
     );
 
-    setIsSaving(true);
-    setSaveMessage("Clearing unlocked schedule entries...");
-
-    try {
-      latestSaveRunRef.current += 1;
-      await saveQueueRef.current.catch(() => undefined);
-      await replaceSchedulesByPeriod(schoolYear, term, gradeLevel, strandFilter, lockedEntries);
-      setDraftEntries([]);
-      setSavedEntries(lockedEntries);
-      setConflicts(nextConflicts);
-      setRecentlyChangedScheduleIds(new Set(lockedEntries.map((entry) => entry.scheduleId)));
-      setPlacementLog([]);
-      setGenerationProgress(null);
-      setOptimizationScore(null);
-      setCompletionPercent(completion.completionPercent);
-      setGenerationEndsAt(null);
-      setPendingLocalDraft(null);
-      removeLocalScheduleDraft(draftStorageKey);
-      setGenerationMessage(
-        nextConflicts.some((conflict) => conflict.type !== "score")
-          ? "Unlocked entries cleared. Removed subjects are now listed for review."
-          : "Unlocked entries cleared. Only locked entries remain.",
-      );
-      setLockMessage(`Cleared ${unlockedEntries.length} unlocked schedule entr${unlockedEntries.length === 1 ? "y" : "ies"}.`);
-      setSaveMessage("Unlocked schedule entries cleared.");
-    } catch (error) {
-      console.error(error);
-      setSaveMessage("Failed to clear unlocked schedule entries. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
+    setDraftEntries(lockedEntries);
+    setConflicts(nextConflicts);
+    setRecentlyChangedScheduleIds(new Set(lockedEntries.map((entry) => entry.scheduleId)));
+    setPlacementLog([]);
+    setGenerationProgress(null);
+    setOptimizationScore(null);
+    setCompletionPercent(completion.completionPercent);
+    setGenerationEndsAt(null);
+    setGenerationMessage(
+      nextConflicts.some((conflict) => conflict.type !== "score")
+        ? "Unlocked entries cleared. Removed subjects are now listed for review."
+        : "Unlocked entries cleared. Only locked entries remain.",
+    );
+    setLockMessage(`Cleared ${unlockedEntries.length} unlocked schedule entr${unlockedEntries.length === 1 ? "y" : "ies"}.`);
+    updateDraftSchedule(lockedEntries, {
+      nextConflicts,
+      nextGenerationMessage: nextConflicts.some((conflict) => conflict.type !== "score")
+        ? "Unlocked entries cleared. Removed subjects are now listed for review."
+        : "Unlocked entries cleared. Only locked entries remain.",
+      nextOptimizationScore: null,
+      nextCompletionPercent: completion.completionPercent,
+      nextGenerationProgress: null,
+    });
   }
 
   async function handleAbsoluteResetSchedule() {
@@ -2828,6 +2734,7 @@ export function SchedulerPage() {
       await saveQueueRef.current.catch(() => undefined);
       await resetSchedulesByContextSafely(schoolYear, term, gradeLevel, strandFilter);
       setDraftEntries([]);
+      setHasDraftChanges(false);
       setSavedEntries([]);
       setConflicts([]);
       setGenerationMessage("");
@@ -2845,29 +2752,6 @@ export function SchedulerPage() {
     } catch (error) {
       console.error(error);
       setSaveMessage("Schedule reset failed. Please try again.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function handleDeleteNamedSchedule() {
-    if (!canEdit || isGenerating || isSaving || !selectedSavedSchedule) return;
-
-    const shouldDelete = window.confirm(
-      `Delete saved schedule "${selectedSavedSchedule.name}"? This will not delete the currently loaded timetable.`,
-    );
-    if (!shouldDelete) return;
-
-    setIsSaving(true);
-    setSaveMessage(`Deleting "${selectedSavedSchedule.name}"...`);
-
-    try {
-      await deleteSavedSchedule(selectedSavedSchedule.savedScheduleId);
-      setSelectedSavedScheduleId("");
-      setSaveMessage(`Deleted saved schedule "${selectedSavedSchedule.name}".`);
-    } catch (error) {
-      console.error(error);
-      setSaveMessage("Saved schedule delete failed.");
     } finally {
       setIsSaving(false);
     }
@@ -2910,7 +2794,6 @@ export function SchedulerPage() {
     });
 
     setDraftEntries(nextEntries);
-    setSavedEntries(nextEntries);
     setConflicts(nextConflicts);
     setRecentlyChangedScheduleIds(changedIds);
     setPlacementLog(nextEntries.filter((entry) => changedIds.has(entry.scheduleId)).slice(-12).reverse());
@@ -2919,7 +2802,7 @@ export function SchedulerPage() {
     setLockMessage(
       `Auto Plot completed. Placed ${totalPlaced} session${totalPlaced === 1 ? "" : "s"}${totalMoved > 0 ? ` and moved ${totalMoved} unlocked session${totalMoved === 1 ? "" : "s"}` : ""}.`,
     );
-    void autoSaveSchedule(nextEntries, "Auto Plot schedule change auto-saved. You can continue fixing it later.", {
+    updateDraftSchedule(nextEntries, {
       nextConflicts,
       nextGenerationMessage:
         nextConflicts.some((conflict) => conflict.type !== "score")
@@ -2940,18 +2823,9 @@ export function SchedulerPage() {
       item.scheduleId === entry.scheduleId ? nextEntry : item,
     );
 
-    if (draftEntries.length > 0) {
-      setDraftEntries(updatedEntries);
-    } else {
-      setSavedEntries(updatedEntries);
-    }
+    setDraftEntries(updatedEntries);
     setLockMessage(nextLocked ? "Entry locked. Future generation will keep it fixed." : "Entry unlocked. Future generation can move it.");
-    void autoSaveSchedule(
-      updatedEntries,
-      nextLocked
-        ? "Lock auto-saved. Future generation will keep this entry fixed."
-        : "Unlock auto-saved. Future generation can move this entry.",
-    );
+    updateDraftSchedule(updatedEntries);
   }
 
   function startEditRoom(entry: ClassScheduleEntry) {
@@ -2974,7 +2848,6 @@ export function SchedulerPage() {
       ...entry,
       room: nextRoom || undefined,
     };
-    const hadDraft = draftEntries.length > 0;
     const otherEntries = visibleEntries.filter((item) => item.scheduleId !== entry.scheduleId);
     const hasNextRoomConflict =
       Boolean(nextRoom) &&
@@ -2996,39 +2869,12 @@ export function SchedulerPage() {
     );
 
     setDraftEntries(updatedEntries);
-    setSavedEntries(updatedEntries);
 
     setEditingRoomScheduleId(null);
     setRoomDraft("");
     setRecentlyChangedScheduleIds(new Set([entry.scheduleId]));
     setLockMessage(nextRoom ? `Room updated to ${nextRoom}.` : "Room assignment cleared.");
-    saveLocalDraft({ entries: updatedEntries, saveStatus: "Room assignment saved locally" });
-
-    if (isCustomScheduleEntry(nextEntry)) {
-      void autoSaveSchedule(updatedEntries, "Room assignment auto-saved.");
-      return;
-    }
-
-    setIsSaving(true);
-    setSaveMessage("Saving room to cloud...");
-    try {
-      await saveScheduleEntry(cleanEntryForLocalDraft(nextEntry));
-      if (!hadDraft) {
-        setDraftEntries([]);
-        removeLocalScheduleDraft(draftStorageKey);
-        setPendingLocalDraft(null);
-      }
-      setSaveMessage("Room assignment saved to cloud");
-    } catch (error) {
-      console.error(error);
-      saveLocalDraft({
-        entries: updatedEntries,
-        saveStatus: "Room cloud save failed, local draft preserved",
-      });
-      setSaveMessage("Room cloud save failed, local draft preserved");
-    } finally {
-      setIsSaving(false);
-    }
+    updateDraftSchedule(updatedEntries);
   }
 
   function handleRemoveEntry(entry: ClassScheduleEntry) {
@@ -3070,7 +2916,6 @@ export function SchedulerPage() {
       : conflicts;
 
     setDraftEntries(updatedEntries);
-    setSavedEntries(updatedEntries);
     setConflicts(nextConflicts);
     setRecentlyChangedScheduleIds(new Set());
     setPlacementLog((current) => current.filter((item) => item.scheduleId !== entry.scheduleId));
@@ -3081,7 +2926,7 @@ export function SchedulerPage() {
         ? "Custom schedule card removed."
         : "Schedule entry removed. It is now listed as unplaced.",
     );
-    void autoSaveSchedule(updatedEntries, "Schedule removal auto-saved. You can continue fixing it later.", {
+    updateDraftSchedule(updatedEntries, {
       nextConflicts,
       nextGenerationMessage: isCustomScheduleEntry(entry)
         ? generationMessage
@@ -3147,12 +2992,11 @@ export function SchedulerPage() {
 
     const updatedEntries = [...visibleEntries, customEntry];
     setDraftEntries(updatedEntries);
-    setSavedEntries(updatedEntries);
     setRecentlyChangedScheduleIds(new Set([customEntry.scheduleId]));
     setPlacementLog((current) => [customEntry, ...current].slice(0, 12));
     setLockMessage(`Added ${title}.`);
     setCustomForm((current) => ({ ...current, title: "", hours: "1" }));
-    void autoSaveSchedule(updatedEntries, "Custom schedule card auto-saved.", {
+    updateDraftSchedule(updatedEntries, {
       nextGenerationMessage: generationMessage,
       nextOptimizationScore: optimizationScore,
       nextCompletionPercent: completionPercent,
@@ -3395,11 +3239,10 @@ export function SchedulerPage() {
         : [...visibleEntries, customEntry];
 
       setDraftEntries(updatedEntries);
-      setSavedEntries(updatedEntries);
       setRecentlyChangedScheduleIds(new Set([customEntry.scheduleId]));
       setPlacementLog((current) => [customEntry, ...current.filter((item) => item.scheduleId !== customEntry.scheduleId)].slice(0, 12));
       setLockMessage(`Placed ${getEntryTitle(customEntry, subjectsById)}.`);
-      void autoSaveSchedule(updatedEntries, "Custom schedule placement auto-saved.", {
+      updateDraftSchedule(updatedEntries, {
         nextGenerationMessage: generationMessage,
         nextOptimizationScore: optimizationScore,
         nextCompletionPercent: completionPercent,
@@ -3434,11 +3277,10 @@ export function SchedulerPage() {
       const updatedConflicts = getConflictsAfterPlaced(conflicts, assignment.assignmentId);
 
       setDraftEntries(updatedEntries);
-      setSavedEntries(updatedEntries);
       setRecentlyChangedScheduleIds(new Set([manualEntry.scheduleId]));
       setConflicts(updatedConflicts);
       setLockMessage("");
-      void autoSaveSchedule(updatedEntries, "Saved to cloud", { nextConflicts: updatedConflicts });
+      updateDraftSchedule(updatedEntries, { nextConflicts: updatedConflicts });
       clearDragState();
       return;
     }
@@ -3501,12 +3343,11 @@ export function SchedulerPage() {
     });
 
     setDraftEntries(updatedEntries);
-    setSavedEntries(updatedEntries);
     setRecentlyChangedScheduleIds(
       new Set([sourceEntry.scheduleId, ...(movedTarget ? [movedTarget.scheduleId] : [])]),
     );
     setLockMessage("");
-    void autoSaveSchedule(updatedEntries, "Manual schedule change auto-saved. You can continue fixing it later.");
+    updateDraftSchedule(updatedEntries);
     clearDragState();
   }
 
@@ -3674,7 +3515,7 @@ export function SchedulerPage() {
               .filter((assignment) => assignment.teacherId === entityId)
               .reduce(
                 (sum, assignment) =>
-                  sum + Number(subjectsById.get(assignment.subjectId)?.units ?? assignment.units ?? 0),
+                  sum + (getLoadHours(subjectsById.get(assignment.subjectId)) || getLoadHours(assignment)),
                 0,
               )
           : 0;
@@ -3686,7 +3527,7 @@ export function SchedulerPage() {
                   load.teacherId === entityId &&
                   load.schoolYear === schoolYear,
               )
-              .reduce((sum, load) => sum + Number(load.units || 0), 0)
+              .reduce((sum, load) => sum + getLoadHours(load), 0)
           : 0;
       const entitySlots =
         viewMode === "section"
@@ -3706,8 +3547,8 @@ export function SchedulerPage() {
               { label: "Teacher", value: (entity as Teacher).fullName },
               { label: "Position", value: (entity as Teacher).position },
               { label: "Specialization", value: (entity as Teacher).specialization },
-              { label: "Total Teaching Load", value: `${teacherTotalTeachingLoad} units` },
-              { label: "Total Ancillary Loads", value: `${teacherTotalAncillaryLoad} units` },
+              { label: "Total Teaching Load", value: `${teacherTotalTeachingLoad} hours` },
+              { label: "Total Ancillary Loads", value: `${teacherTotalAncillaryLoad} hours` },
             ];
       const timetableRows = [
         ...entitySlots.map((slot) => ({ type: "slot" as const, startTime: slot.startTime, endTime: slot.endTime, slot })),
@@ -4138,6 +3979,14 @@ export function SchedulerPage() {
             {canEdit && (
               <>
                 <button
+                  className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  disabled={isGenerating || isSaving || visibleEntries.length === 0}
+                  onClick={() => void handleSaveCurrentSchedule()}
+                  type="button"
+                >
+                  <Save size={16} /> Save
+                </button>
+                <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                   disabled={isGenerating || isSaving || unlockedScheduleCount === 0}
                   onClick={() => void handleClearUnlockedSchedule()}
@@ -4183,7 +4032,7 @@ export function SchedulerPage() {
 
       <div className="mb-3 grid gap-2 sm:grid-cols-4">
         <SummaryCard detail={gradeLevel === "all" ? "All grades selected" : `Grade ${gradeLevel} selected`} label="Sections" value={visibleSections.length} />
-        <SummaryCard detail={draftEntries.length > 0 ? "draft active" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
+        <SummaryCard detail={hasDraftChanges ? "draft active" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
         <SummaryCard detail="needs review" label="Conflicts" value={actionableConflicts.length} />
         <SummaryCard detail={optimizationScore === null ? "audit to calculate" : `score ${optimizationScore.toLocaleString()}`} label="Done" value={completionPercent === null ? "-" : `${completionPercent}%`} />
       </div>
@@ -4220,58 +4069,6 @@ export function SchedulerPage() {
               <button className={viewMode === "teacher" ? "bg-blue-600 text-white" : "bg-white text-slate-700"} onClick={() => setViewMode("teacher")} type="button">By Teacher</button>
             </div>
           </label>
-        </div>
-        <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)_auto_auto]">
-          <label className="text-xs font-semibold uppercase text-slate-500">
-            Schedule Name
-            <input
-              className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
-              disabled={!canEdit || isGenerating || isSaving}
-              onChange={(event) => setScheduleName(event.target.value)}
-              placeholder="e.g. First draft"
-              value={scheduleName}
-            />
-          </label>
-          <button
-            className="mt-5 inline-flex h-9 items-center justify-center rounded-md bg-blue-600 px-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            disabled={!canEdit || isGenerating || isSaving || visibleEntries.length === 0}
-            onClick={() => void handleSaveNamedSchedule()}
-            type="button"
-          >
-            Save Schedule
-          </button>
-          <label className="text-xs font-semibold uppercase text-slate-500">
-            Saved Schedules
-            <select
-              className="mt-1 h-9 w-full rounded-md border border-slate-300 px-2 text-sm font-normal normal-case text-slate-900"
-              disabled={savedSchedules.length === 0 || isGenerating || isSaving}
-              onChange={(event) => setSelectedSavedScheduleId(event.target.value)}
-              value={selectedSavedScheduleId}
-            >
-              <option value="">Choose saved schedule</option>
-              {savedSchedules.map((savedSchedule) => (
-                <option key={savedSchedule.savedScheduleId} value={savedSchedule.savedScheduleId}>
-                  {savedSchedule.name} ({savedSchedule.entryCount} sessions)
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="mt-5 inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
-            disabled={!canEdit || isGenerating || isSaving || !selectedSavedSchedule}
-            onClick={() => void handleLoadNamedSchedule()}
-            type="button"
-          >
-            Load Selected
-          </button>
-          <button
-            className="mt-5 inline-flex h-9 items-center justify-center rounded-md border border-red-300 bg-red-50 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
-            disabled={!canEdit || isGenerating || isSaving || !selectedSavedSchedule}
-            onClick={() => void handleDeleteNamedSchedule()}
-            type="button"
-          >
-            Delete Selected
-          </button>
         </div>
         {canEdit && (
           <div className="mt-3 border-t border-slate-200 pt-3">

@@ -1,5 +1,6 @@
 import type { CurriculumMapping, LoadAssignment, Section, Subject, Teacher } from "../../types/loading";
 import { subjectCategories } from "../../types/loading";
+import { getLoadHours } from "../../utils/loadHours";
 import { TeacherDropdown } from "./TeacherDropdown";
 
 type LoadMatrixProps = {
@@ -99,7 +100,7 @@ export function LoadMatrix({
                     )}
                     <p className="font-semibold text-slate-950">{subject.subjectName}</p>
                     <p className="mt-0.5 text-[11px] text-slate-500">
-                      {subject.subjectCode} - {subject.units} units
+                      {subject.subjectCode} - {getLoadHours(subject)} hours
                     </p>
                   </td>
                   {sections.map((section) => {

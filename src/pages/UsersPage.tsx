@@ -1,8 +1,9 @@
-import { Check, Save, ShieldAlert, X } from "lucide-react";
+import { Check, Printer, Save, ShieldAlert, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   collection,
   deleteField,
+  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
@@ -41,8 +42,35 @@ const statusClass: Record<UserStatus, string> = {
   disabled: "bg-slate-100 text-slate-600 ring-slate-200",
 };
 
+const deleteUserPassword = "dxuxihnfwcls";
+const userSaveTimeoutMs = 15000;
+
+function getUserSaveErrorMessage(caught: unknown, fallback: string) {
+  const message = caught instanceof Error ? caught.message : "";
+  const lowerMessage = message.toLowerCase();
+
+  if (
+    lowerMessage.includes("resource-exhausted")
+    || lowerMessage.includes("quota")
+    || lowerMessage.includes("timed out")
+  ) {
+    return "Firestore quota is currently exhausted, so user settings cannot be saved yet. Wait for the quota to reset or upgrade/increase the Firebase quota, then try again.";
+  }
+
+  return caught instanceof Error ? `${fallback}: ${caught.message}` : fallback;
+}
+
 function normalizeUserRole(role: string): UserRole {
   return roleOptions.some((option) => option.value === role) ? (role as UserRole) : "teacher";
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 export function UsersPage() {
@@ -50,7 +78,9 @@ export function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
+  const [isSavingAll, setIsSavingAll] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, UserDraft>>({});
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
@@ -106,6 +136,21 @@ export function UsersPage() {
     [sections],
   );
 
+  const teachersById = useMemo(
+    () => new Map(teachers.map((teacher) => [teacher.teacherId, teacher])),
+    [teachers],
+  );
+
+  const sectionsById = useMemo(
+    () => new Map(sections.map((section) => [section.sectionId, section])),
+    [sections],
+  );
+
+  const unregisteredTeachers = useMemo(() => {
+    const assignedTeacherIds = new Set(users.map((user) => user.assignedTeacherId).filter(Boolean));
+    return activeTeachers.filter((teacher) => !assignedTeacherIds.has(teacher.teacherId));
+  }, [activeTeachers, users]);
+
   function buildUserDraft(user: UserRow): UserDraft {
     const role = normalizeUserRole(user.role);
 
@@ -131,16 +176,63 @@ export function UsersPage() {
     }));
   }
 
-  function getUserProfileUpdatePayload(user: UserRow, draft: UserDraft, nextStatus: UserStatus, nextRole: UserRole, nextModulePermissions: AppModule[]) {
-    return {
-      role: nextRole,
-      status: nextStatus,
-      modulePermissions: nextRole === "super_admin" ? getDefaultModulePermissions("super_admin") : nextModulePermissions,
-      assignedTeacherId: draft.assignedTeacherId || deleteField(),
-      advisingSectionId: draft.advisingSectionId || deleteField(),
-      reviewedAt: serverTimestamp(),
-      reviewedBy: profile?.userId || deleteField(),
-    };
+  function areSamePermissions(first: AppModule[] = [], second: AppModule[] = []) {
+    if (first.length !== second.length) return false;
+    const secondPermissions = new Set(second);
+    return first.every((permission) => secondPermissions.has(permission));
+  }
+
+  async function updateUserDocWithTimeout(userId: string, payload: Record<string, unknown>) {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      await Promise.race([
+        updateDoc(doc(db, "users", userId), payload),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("The save request timed out. Firestore may be backing off because quota is exhausted.")),
+            userSaveTimeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
+  function getUserProfileUpdatePayload(
+    user: UserRow,
+    draft: UserDraft,
+    nextStatus: UserStatus,
+    nextRole: UserRole,
+    nextModulePermissions: AppModule[],
+    includeReviewFields = false,
+    forceAccessFields = false,
+  ) {
+    const payload: Record<string, unknown> = {};
+    const normalizedPermissions = nextRole === "super_admin" ? getDefaultModulePermissions("super_admin") : nextModulePermissions;
+
+    if (forceAccessFields || user.role !== nextRole) {
+      payload.role = nextRole;
+    }
+    if (forceAccessFields || user.status !== nextStatus) {
+      payload.status = nextStatus;
+    }
+    if (forceAccessFields || !areSamePermissions(user.modulePermissions ?? [], normalizedPermissions)) {
+      payload.modulePermissions = normalizedPermissions;
+    }
+    if ((user.assignedTeacherId ?? "") !== draft.assignedTeacherId) {
+      payload.assignedTeacherId = draft.assignedTeacherId || deleteField();
+    }
+    if ((user.advisingSectionId ?? "") !== draft.advisingSectionId) {
+      payload.advisingSectionId = draft.advisingSectionId || deleteField();
+    }
+    if (includeReviewFields) {
+      payload.reviewedAt = serverTimestamp();
+      payload.reviewedBy = profile?.userId || deleteField();
+    }
+
+    return payload;
   }
 
   async function persistUserProfile(
@@ -148,6 +240,7 @@ export function UsersPage() {
     nextStatus: UserStatus,
     nextRole = getDraft(user).role,
     nextModulePermissions = getDraft(user).modulePermissions,
+    includeReviewFields = false,
   ) {
     if (!isSuperAdmin) {
       return;
@@ -155,6 +248,7 @@ export function UsersPage() {
 
     setSavingUserId(user.id);
     setError("");
+    setSaveMessage("");
 
     const draft = getDraft(user);
     const effectiveModulePermissions =
@@ -163,16 +257,22 @@ export function UsersPage() {
         : nextModulePermissions;
 
     try {
-      await updateDoc(doc(db, "users", user.id),
-        getUserProfileUpdatePayload(user, draft, nextStatus, nextRole, effectiveModulePermissions),
+      const payload = getUserProfileUpdatePayload(
+        user,
+        draft,
+        nextStatus,
+        nextRole,
+        effectiveModulePermissions,
+        includeReviewFields,
+        true,
       );
+      if (Object.keys(payload).length > 0) {
+        await updateUserDocWithTimeout(user.id, payload);
+      }
+      setSaveMessage(`${user.fullName}'s user settings were saved.`);
     } catch (caught) {
       console.error(caught);
-      setError(
-        caught instanceof Error
-          ? `Unable to update that user: ${caught.message}`
-          : "Unable to update that user. Confirm your account is approved as Super Admin.",
-      );
+      setError(getUserSaveErrorMessage(caught, "Unable to update that user"));
     } finally {
       setSavingUserId(null);
     }
@@ -184,7 +284,7 @@ export function UsersPage() {
     nextRole = getDraft(user).role,
     nextModulePermissions = getDraft(user).modulePermissions,
   ) {
-    await persistUserProfile(user, nextStatus, nextRole, nextModulePermissions);
+    await persistUserProfile(user, nextStatus, nextRole, nextModulePermissions, true);
   }
 
   async function updateRole(user: UserRow, nextRole: UserRole) {
@@ -224,6 +324,182 @@ export function UsersPage() {
     }
   }
 
+  async function saveAllUserSettings() {
+    if (!isSuperAdmin) return;
+    setIsSavingAll(true);
+    setError("");
+    setSaveMessage("");
+
+    try {
+      await Promise.all(
+        users
+          .filter((user) => profile?.userId !== user.userId)
+          .map((user) => {
+            const draft = getDraft(user);
+            const nextRole = draft.role;
+            const effectiveModulePermissions =
+              nextRole === "super_admin" || draft.modulePermissions.length === 0
+                ? getDefaultModulePermissions(nextRole)
+                : draft.modulePermissions;
+            const payload = getUserProfileUpdatePayload(
+              user,
+              draft,
+              user.status,
+              nextRole,
+              effectiveModulePermissions,
+              false,
+              false,
+            );
+
+            return Object.keys(payload).length > 0
+              ? updateUserDocWithTimeout(user.id, payload)
+              : Promise.resolve();
+          }),
+      );
+      setSaveMessage("All user settings were saved.");
+    } catch (caught) {
+      console.error(caught);
+      setError(getUserSaveErrorMessage(caught, "Unable to save all user settings"));
+    } finally {
+      setIsSavingAll(false);
+    }
+  }
+
+  async function deleteUserProfile(user: UserRow) {
+    if (!isSuperAdmin || profile?.userId === user.userId) return;
+
+    const password = window.prompt(`Enter the Super Admin delete password to delete ${user.fullName}'s portal user profile.`);
+    if (password === null) return;
+
+    if (password !== deleteUserPassword) {
+      setError("Incorrect password. User profile was not deleted.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${user.fullName}'s portal user profile? This removes their app access record, but does not delete their Firebase Authentication account.`,
+    );
+    if (!confirmed) return;
+
+    setSavingUserId(user.id);
+    setError("");
+    setSaveMessage("");
+
+    try {
+      await deleteDoc(doc(db, "users", user.id));
+      setSaveMessage(`${user.fullName}'s user profile was deleted.`);
+    } catch (caught) {
+      console.error(caught);
+      setError(caught instanceof Error ? `Unable to delete that user profile: ${caught.message}` : "Unable to delete that user profile.");
+    } finally {
+      setSavingUserId(null);
+    }
+  }
+
+  function getTeacherAssignmentLabel(teacherId?: string) {
+    if (!teacherId) return "No linked teacher";
+    const teacher = teachersById.get(teacherId);
+    return teacher ? `${teacher.fullName} (${teacher.position || "Teacher"})` : teacherId;
+  }
+
+  function getSectionAssignmentLabel(sectionId?: string) {
+    if (!sectionId) return "No advising section";
+    const section = sectionsById.get(sectionId);
+    return section ? `${section.sectionName} - Grade ${section.gradeLevel}` : sectionId;
+  }
+
+  function printUsersReport() {
+    const reportWindow = window.open("", "_blank");
+    if (!reportWindow) return;
+
+    const userRows = users
+      .map((user) => {
+        const draft = getDraft(user);
+        return `
+          <tr>
+            <td>
+              <strong>${escapeHtml(user.fullName)}</strong>
+              <div class="muted">${escapeHtml(user.email)}</div>
+            </td>
+            <td>${escapeHtml(getRoleLabel(draft.role))}</td>
+            <td>${escapeHtml(user.status)}</td>
+            <td>${escapeHtml(getTeacherAssignmentLabel(draft.assignedTeacherId))}</td>
+            <td>${escapeHtml(getSectionAssignmentLabel(draft.advisingSectionId))}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const unregisteredRows = unregisteredTeachers.length
+      ? unregisteredTeachers
+          .map((teacher) => `
+            <tr>
+              <td>${escapeHtml(teacher.fullName)}</td>
+              <td>${escapeHtml(teacher.position || "Teacher")}</td>
+              <td>${escapeHtml(teacher.specialization)}</td>
+            </tr>
+          `)
+          .join("")
+      : `<tr><td colspan="3">All active teachers are linked to user accounts.</td></tr>`;
+
+    reportWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <title>Users Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #0f172a; margin: 32px; }
+            h1 { font-size: 22px; margin: 0; }
+            h2 { font-size: 16px; margin: 28px 0 10px; }
+            .muted { color: #64748b; font-size: 11px; margin-top: 3px; }
+            .meta { color: #475569; font-size: 12px; margin-top: 6px; }
+            table { border-collapse: collapse; width: 100%; font-size: 12px; }
+            th, td { border: 1px solid #cbd5e1; padding: 7px 8px; vertical-align: top; }
+            th { background: #f1f5f9; text-align: left; }
+            @media print { body { margin: 18mm; } }
+          </style>
+        </head>
+        <body>
+          <h1>Users Report</h1>
+          <div class="meta">Generated ${escapeHtml(new Date().toLocaleString())}</div>
+          <div class="meta">${escapeHtml(users.length)} users - ${escapeHtml(pendingUsers.length)} pending - ${escapeHtml(unregisteredTeachers.length)} teachers not yet registered</div>
+
+          <h2>Registered Users</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Teacher Assignment</th>
+                <th>Advising Assignment</th>
+              </tr>
+            </thead>
+            <tbody>${userRows}</tbody>
+          </table>
+
+          <h2>Teachers Not Yet Registered As Users</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Teacher</th>
+                <th>Position</th>
+                <th>Specialization</th>
+              </tr>
+            </thead>
+            <tbody>${unregisteredRows}</tbody>
+          </table>
+          <script>
+            window.onload = () => {
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    reportWindow.document.close();
+  }
+
   return (
     <section>
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -233,8 +509,25 @@ export function UsersPage() {
             Review pending accounts and assign school MIS access.
           </p>
         </div>
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-          {pendingUsers.length} pending
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md bg-civic px-4 text-sm font-semibold text-white hover:bg-civic/90 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!isSuperAdmin || isSavingAll || users.length === 0}
+            onClick={() => void saveAllUserSettings()}
+            type="button"
+          >
+            <Save size={16} /> {isSavingAll ? "Saving..." : "Save All"}
+          </button>
+          <button
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={printUsersReport}
+            type="button"
+          >
+            <Printer size={16} /> Print Report
+          </button>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+            {pendingUsers.length} pending
+          </div>
         </div>
       </div>
 
@@ -246,6 +539,7 @@ export function UsersPage() {
       )}
 
       {error && <p className="mt-5 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {saveMessage && <p className="mt-5 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{saveMessage}</p>}
 
       <div className="mt-5 overflow-hidden rounded-lg border border-slate-200 bg-white">
         {loading ? (
@@ -382,7 +676,7 @@ export function UsersPage() {
                         <div className="flex justify-end gap-2">
                           <button
                             className="inline-flex h-9 items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!isSuperAdmin || isSaving || isSelf}
+                            disabled={!isSuperAdmin || isSaving || isSelf || isSavingAll}
                             onClick={() => void saveUserSettings(user)}
                             type="button"
                           >
@@ -390,7 +684,7 @@ export function UsersPage() {
                           </button>
                           <button
                             className="inline-flex h-9 items-center gap-2 rounded-md bg-civic px-3 text-sm font-semibold text-white hover:bg-civic/90 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!isSuperAdmin || isSaving || isSelf || user.status === "approved"}
+                            disabled={!isSuperAdmin || isSaving || isSelf || isSavingAll || user.status === "approved"}
                             onClick={() => updateUserAccess(user, "approved")}
                             type="button"
                           >
@@ -398,11 +692,19 @@ export function UsersPage() {
                           </button>
                           <button
                             className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!isSuperAdmin || isSaving || isSelf || user.status === "disabled"}
+                            disabled={!isSuperAdmin || isSaving || isSelf || isSavingAll || user.status === "disabled"}
                             onClick={() => updateUserAccess(user, "disabled")}
                             type="button"
                           >
                             <X size={16} /> Disable
+                          </button>
+                          <button
+                            className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={!isSuperAdmin || isSaving || isSelf || isSavingAll}
+                            onClick={() => void deleteUserProfile(user)}
+                            type="button"
+                          >
+                            <Trash2 size={16} /> Delete
                           </button>
                         </div>
                       </td>

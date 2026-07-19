@@ -41,7 +41,7 @@ export function LoadSummaryPanel({
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-slate-900">{teacher.fullName}</p>
-                <p className="text-xs text-slate-500">{totalLoad} units</p>
+                <p className="text-xs text-slate-500">{totalLoad} hours</p>
               </div>
               <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ring-1 ${getLoadStatusClass(status)}`}>
                 {status}

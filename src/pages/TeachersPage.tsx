@@ -25,6 +25,7 @@ import {
   requireText,
   type ImportColumn,
 } from "../utils/excelImport";
+import { getLoadHours } from "../utils/loadHours";
 import { printTable } from "../utils/printTable";
 
 const emptyTeacher = {
@@ -175,7 +176,7 @@ export function TeachersPage() {
     setAncillaryForm({
       schoolYear: load.schoolYear,
       ancillary: load.ancillary,
-      units: Number(load.units || 0),
+      units: getLoadHours(load),
     });
     setAncillaryError("");
     setAncillaryOpen(true);
@@ -239,7 +240,7 @@ export function TeachersPage() {
         { header: "Teacher", getValue: (teacher) => teacher.fullName },
         { header: "Position", getValue: (teacher) => teacher.position },
         { header: "Specialization", getValue: (teacher) => teacher.specialization },
-        { header: "Max Load", getValue: (teacher) => `${teacher.maxLoad} units` },
+        { header: "Max Load", getValue: (teacher) => `${teacher.maxLoad} hours` },
         {
           header: "Ancilliaries",
           getValue: (teacher) => {
@@ -247,7 +248,7 @@ export function TeachersPage() {
 
             return loads.length
               ? loads
-                  .map((load) => `${load.ancillary} - ${load.units} units x 3 (${load.schoolYear})`)
+                  .map((load) => `${load.ancillary} - ${getLoadHours(load)} hours (${load.schoolYear})`)
                   .join("; ")
               : "None";
           },
@@ -277,7 +278,7 @@ export function TeachersPage() {
     },
     { header: "Position", render: (teacher) => teacher.position },
     { header: "Specialization", render: (teacher) => teacher.specialization },
-    { header: "Max Load", render: (teacher) => `${teacher.maxLoad} units` },
+    { header: "Max Load", render: (teacher) => `${teacher.maxLoad} hours` },
     {
       header: "Ancilliaries",
       render: (teacher) => {
@@ -297,7 +298,7 @@ export function TeachersPage() {
                 type="button"
               >
                 <span className="font-semibold">{load.ancillary}</span>
-                <span className="text-emerald-700"> - {load.units} units x 3</span>
+                <span className="text-emerald-700"> - {getLoadHours(load)} hours</span>
                 <span className="text-emerald-600"> ({load.schoolYear})</span>
               </button>
             ))}
@@ -446,13 +447,13 @@ export function TeachersPage() {
             className="h-11 rounded-md border border-slate-300 px-3"
             min={0}
             onChange={(event) => setAncillaryForm({ ...ancillaryForm, units: Number(event.target.value) })}
-            placeholder="Units"
+            placeholder="Hours"
             required
             type="number"
             value={ancillaryForm.units}
           />
           <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
-            Added load: <span className="font-semibold text-slate-950">{Number(ancillaryForm.units || 0) * 3} units</span>
+            Added load: <span className="font-semibold text-slate-950">{Number(ancillaryForm.units || 0)} hours</span>
           </div>
           {ancillaryError && (
             <p className="rounded-md bg-red-50 px-3 py-2 text-sm font-medium text-red-700 sm:col-span-2">

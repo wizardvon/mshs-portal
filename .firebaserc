@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "mshs-portal-be381"
-  }
+    "default": "mshs-portal-be381",
+    "DLL": "mshs-portal-be381"
+  },
+  "targets": {},
+  "etags": {}
 }
