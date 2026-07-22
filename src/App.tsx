@@ -21,6 +21,7 @@ import { PendingApprovalPage } from "./pages/PendingApprovalPage";
 import { MyPersonnelAttendancePage } from "./pages/MyPersonnelAttendancePage";
 import { ObservationsPage } from "./pages/ObservationsPage";
 import { PersonnelAttendancePage } from "./pages/PersonnelAttendancePage";
+import { PersonnelLocatorPage } from "./pages/PersonnelLocatorPage";
 import { PersonnelSettingsPage } from "./pages/PersonnelSettingsPage";
 import { PrintableCertificatesPage } from "./pages/PrintableCertificatesPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -88,6 +89,9 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute requiredModule="personnel_attendance" />}>
             <Route path="/personnel-attendance" element={<PersonnelAttendancePage />} />
+          </Route>
+          <Route element={<ProtectedRoute requiredModule="personnel_locator" />}>
+            <Route path="/personnel-locator" element={<PersonnelLocatorPage />} />
           </Route>
           <Route element={<ProtectedRoute requiredModule="my_personnel_attendance" />}>
             <Route path="/my-attendance" element={<MyPersonnelAttendancePage />} />

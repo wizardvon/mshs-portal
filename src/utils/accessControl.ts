@@ -30,6 +30,7 @@ export const appModules: Array<{ id: AppModule; label: string }> = [
   { id: "grade_summary", label: "Summary of Grades" },
   { id: "observations", label: "Observation & Coaching" },
   { id: "personnel_attendance", label: "Personnel Attendance" },
+  { id: "personnel_locator", label: "Personnel Locator" },
   { id: "my_personnel_attendance", label: "My Attendance" },
   { id: "teacher_loads", label: "Teacher Loads" },
   { id: "certificates", label: "Certificates" },
@@ -62,6 +63,7 @@ export const defaultModulePermissionsByRole: Record<UserRole, AppModule[]> = {
     "grade_summary",
     "observations",
     "personnel_attendance",
+    "personnel_locator",
     "teacher_loads",
     "certificates",
     "printable_certificates",
@@ -70,12 +72,12 @@ export const defaultModulePermissionsByRole: Record<UserRole, AppModule[]> = {
     "settings",
     "backup_restore",
   ],
-  principal: ["dashboard", "loading", "scheduler", "dll_submissions", "document_requests", "mps", "grade_summary", "observations", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
-  master_teacher: ["dashboard", "loading", "teachers", "subjects", "sections", "dll_submissions", "document_requests", "mps", "grade_submissions", "grade_summary", "observations", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
-  teacher: ["dashboard", "loading", "dll_submissions", "document_requests", "mps", "grade_submissions", "grade_summary", "observations", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
-  registrar: ["dashboard", "sections", "enrollment", "printable_certificates", "reports", "personnel_settings"],
-  administrative_officer: ["dashboard", "teachers", "document_requests", "personnel_attendance", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "backup_restore", "personnel_settings"],
-  administrative_assistant: ["dashboard", "document_requests", "personnel_attendance", "my_personnel_attendance", "printable_certificates", "reports", "personnel_settings"],
+  principal: ["dashboard", "loading", "scheduler", "dll_submissions", "document_requests", "mps", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
+  master_teacher: ["dashboard", "loading", "teachers", "subjects", "sections", "dll_submissions", "document_requests", "mps", "grade_submissions", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
+  teacher: ["dashboard", "loading", "dll_submissions", "document_requests", "mps", "grade_submissions", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
+  registrar: ["dashboard", "sections", "enrollment", "personnel_locator", "printable_certificates", "reports", "personnel_settings"],
+  administrative_officer: ["dashboard", "teachers", "document_requests", "personnel_attendance", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "backup_restore", "personnel_settings"],
+  administrative_assistant: ["dashboard", "document_requests", "personnel_attendance", "personnel_locator", "my_personnel_attendance", "printable_certificates", "reports", "personnel_settings"],
 };
 
 export function getRoleLabel(role: UserRole) {
@@ -94,7 +96,7 @@ export function getUserModulePermissions(
   const permissions = profile.modulePermissions?.length
     ? profile.modulePermissions
     : getDefaultModulePermissions(profile.role);
-  const requiredBasePermissions: AppModule[] = ["dashboard", "personnel_settings"];
+  const requiredBasePermissions: AppModule[] = ["dashboard", "personnel_locator", "personnel_settings"];
   const mergedPermissions = Array.from(new Set([...requiredBasePermissions, ...permissions]));
 
   return mergedPermissions;

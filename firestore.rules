@@ -243,7 +243,7 @@ service cloud.firestore {
 
     function validModulePermissions() {
       return request.resource.data.modulePermissions is list
-        && request.resource.data.modulePermissions.size() <= 24
+        && request.resource.data.modulePermissions.size() <= 26
         && request.resource.data.modulePermissions.hasOnly([
           "dashboard",
           "loading",
@@ -261,6 +261,7 @@ service cloud.firestore {
           "grade_summary",
           "observations",
           "personnel_attendance",
+          "personnel_locator",
           "my_personnel_attendance",
           "teacher_loads",
           "certificates",
@@ -878,6 +879,43 @@ service cloud.firestore {
         ]);
     }
 
+    function canUpdateOwnPersonnelLocation(staffId) {
+      return isApprovedUser()
+        && (
+          staffId == request.auth.uid
+          || staffId == currentProfile().data.assignedTeacherId
+        );
+    }
+
+    function validPersonnelLocation(locationId) {
+      return request.resource.data.locationId == locationId
+        && request.resource.data.staffId == locationId
+        && request.resource.data.staffName is string
+        && request.resource.data.staffType in ["teaching", "non_teaching"]
+        && request.resource.data.roleOrPosition is string
+        && request.resource.data.status in ["available", "on_leave", "official_business"]
+        && request.resource.data.currentLocation is string
+        && validOptionalString("note")
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updaterName is string
+        && validOptionalTimestamp("createdAt")
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "locationId",
+          "staffId",
+          "staffName",
+          "staffType",
+          "roleOrPosition",
+          "status",
+          "currentLocation",
+          "note",
+          "updatedBy",
+          "updaterName",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
     function validPersonnelCreditBalance(creditId) {
       return request.resource.data.creditId == creditId
         && request.resource.data.staffId is string
@@ -984,7 +1022,7 @@ service cloud.firestore {
     }
  
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isApprovedAdmin() || canManagePersonnelAttendance() || canUseDocumentRequests());
+      allow read: if signedIn() && (request.auth.uid == userId || isApprovedUser() || isApprovedAdmin() || canManagePersonnelAttendance() || canUseDocumentRequests());
       allow create: if validFirstUser(userId) || validBootstrapUser(userId) || validPendingUser(userId);
       allow update: if (isSuperAdmin() && validUserProfileWrite(userId)) || validBootstrapUser(userId);
       allow delete: if isSuperAdmin();
@@ -1122,6 +1160,13 @@ service cloud.firestore {
       allow create, update: if canManagePersonnelAttendance()
         && validPersonnelAttendance(attendanceId);
       allow delete: if canManagePersonnelAttendance();
+    }
+
+    match /personnelLocations/{locationId} {
+      allow read: if isApprovedUser();
+      allow create, update: if canUpdateOwnPersonnelLocation(locationId)
+        && validPersonnelLocation(locationId);
+      allow delete: if isSuperAdmin();
     }
 
     match /personnelCredits/{creditId} {

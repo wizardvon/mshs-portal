@@ -26,6 +26,7 @@ export type ClassroomObservationType = "Formal (CO)" | "Informal (ICO)" | "Walkt
 export type ObservationStatus = "scheduled" | "done" | "cancelled";
 export type PersonnelStaffType = "teaching" | "non_teaching";
 export type PersonnelAttendanceStatus = "present" | "absent" | "official_business";
+export type PersonnelLocatorStatus = "available" | "on_leave" | "official_business";
 export type EnrollmentStatus = "enrolled" | "transferred" | "dropped";
 
 export type Teacher = {
@@ -331,6 +332,21 @@ export type PersonnelAttendanceRecord = {
   remarks: string;
   recordedBy: string;
   recorderName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type PersonnelLocation = {
+  locationId: string;
+  staffId: string;
+  staffName: string;
+  staffType: PersonnelStaffType;
+  roleOrPosition: string;
+  status: PersonnelLocatorStatus;
+  currentLocation: string;
+  note?: string;
+  updatedBy: string;
+  updaterName: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };

@@ -13,6 +13,7 @@ import {
   Eye,
   Hourglass,
   Layers3,
+  MapPin,
   Settings,
   ShieldCheck,
   UserCheck,
@@ -92,6 +93,7 @@ type QuickAction = {
 
 const quickActions: QuickAction[] = [
   { label: "Personnel Attendance", detail: "record and review staff attendance", icon: UserCheck, module: "personnel_attendance", to: "/personnel-attendance" },
+  { label: "Personnel Locator", detail: "find current staff locations", icon: MapPin, module: "personnel_locator", to: "/personnel-locator" },
   { label: "DLL Submissions", detail: "submit or review DLL records", icon: FileCheck2, module: "dll_submissions", to: "/dll-submissions" },
   { label: "Document Requests", detail: "submit or confirm requested documents", icon: FileText, module: "document_requests", to: "/document-requests" },
   { label: "Observation & Coaching", detail: "view and schedule observations", icon: Eye, module: "observations", to: "/observations" },

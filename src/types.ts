@@ -25,6 +25,7 @@ export type AppModule =
   | "grade_summary"
   | "observations"
   | "personnel_attendance"
+  | "personnel_locator"
   | "my_personnel_attendance"
   | "teacher_loads"
   | "certificates"

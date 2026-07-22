@@ -14,6 +14,7 @@ import {
   Eye,
   LayoutDashboard,
   LogOut,
+  MapPin,
   Menu,
   Printer,
   Settings,
@@ -58,6 +59,7 @@ export function AppShell() {
     canSee("observations") ||
     profile?.role === "super_admin" ||
     canSee("personnel_attendance") ||
+    canSee("personnel_locator") ||
     canSee("my_personnel_attendance") ||
     canSee("teacher_loads");
   const showAdminGroup =
@@ -137,6 +139,7 @@ export function AppShell() {
             {showMonitoringGroup && <SidebarSectionLabel>Monitoring</SidebarSectionLabel>}
             {canSee("observations") && <SidebarLink icon={Eye} label="Observation & Coaching" onClick={closeSidebar} to="/observations" />}
             {(profile?.role === "super_admin" || canSee("personnel_attendance")) && <SidebarLink icon={UserCheck} label="Personnel Attendance" onClick={closeSidebar} to="/personnel-attendance" />}
+            {canSee("personnel_locator") && <SidebarLink icon={MapPin} label="Personnel Locator" onClick={closeSidebar} to="/personnel-locator" />}
             {canSee("my_personnel_attendance") && <SidebarLink icon={UserCheck} label="My Attendance" onClick={closeSidebar} to="/my-attendance" />}
             {canSee("teacher_loads") && <SidebarLink icon={Users} label="Teacher Loads" onClick={closeSidebar} to="/teacher-loads" />}
             {showAdminGroup && <SidebarSectionLabel>Admin</SidebarSectionLabel>}
