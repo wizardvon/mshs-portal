@@ -20,6 +20,7 @@ import type { Section, Teacher } from "../types/loading";
 import {
   appModules,
   getDefaultModulePermissions,
+  getRequiredModulePermissions,
   getRoleLabel,
   getUserModulePermissions,
   roleOptions,
@@ -82,6 +83,7 @@ export function UsersPage() {
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [isSavingAll, setIsSavingAll] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, UserDraft>>({});
+  const [dirtyDraftUserIds, setDirtyDraftUserIds] = useState<Set<string>>(new Set());
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const isSuperAdmin = profile?.role === "super_admin";
@@ -100,11 +102,14 @@ export function UsersPage() {
             ...(userDoc.data() as UserProfile),
           }));
         setUsers(nextUsers);
-        setDrafts(
+        setDrafts((currentDrafts) =>
           nextUsers.reduce(
             (nextDrafts, user) => ({
               ...nextDrafts,
-              [user.id]: buildUserDraft(user),
+              [user.id]:
+                dirtyDraftUserIds.has(user.id) && currentDrafts[user.id]
+                  ? currentDrafts[user.id]
+                  : buildUserDraft(user),
             }),
             {} as Record<string, UserDraft>,
           ),
@@ -119,7 +124,7 @@ export function UsersPage() {
         setLoading(false);
       },
     );
-  }, []);
+  }, [dirtyDraftUserIds]);
 
   const pendingUsers = useMemo(
     () => users.filter((user) => user.status === "pending"),
@@ -167,6 +172,7 @@ export function UsersPage() {
   }
 
   function updateDraft(user: UserRow, updates: Partial<UserDraft>) {
+    setDirtyDraftUserIds((current) => new Set(current).add(user.id));
     setDrafts((current) => ({
       ...current,
       [user.id]: {
@@ -269,6 +275,11 @@ export function UsersPage() {
       if (Object.keys(payload).length > 0) {
         await updateUserDocWithTimeout(user.id, payload);
       }
+      setDirtyDraftUserIds((current) => {
+        const next = new Set(current);
+        next.delete(user.id);
+        return next;
+      });
       setSaveMessage(`${user.fullName}'s user settings were saved.`);
     } catch (caught) {
       console.error(caught);
@@ -296,6 +307,7 @@ export function UsersPage() {
 
   function toggleModule(user: UserRow, moduleId: AppModule) {
     if (!isSuperAdmin || getDraft(user).role === "super_admin" || moduleId === "dashboard") return;
+    if (getRequiredModulePermissions(getDraft(user).role).includes(moduleId)) return;
 
     const currentPermissions = getDraft(user).modulePermissions;
     const nextPermissions = currentPermissions.includes(moduleId)
@@ -356,6 +368,7 @@ export function UsersPage() {
               : Promise.resolve();
           }),
       );
+      setDirtyDraftUserIds(new Set());
       setSaveMessage("All user settings were saved.");
     } catch (caught) {
       console.error(caught);
@@ -565,6 +578,7 @@ export function UsersPage() {
                   const isSaving = savingUserId === user.id;
                   const isSelf = profile?.userId === user.userId;
                   const draft = getDraft(user);
+                  const requiredModuleIds = getRequiredModulePermissions(draft.role);
 
                   return (
                     <tr key={user.id} className={user.status === "pending" ? "bg-amber-50/35" : ""}>
@@ -633,6 +647,7 @@ export function UsersPage() {
                               .filter((module) => module.id !== "users")
                               .map((module) => {
                                 const checked = draft.modulePermissions.includes(module.id);
+                                const required = requiredModuleIds.includes(module.id);
 
                                 return (
                                   <label
@@ -647,7 +662,7 @@ export function UsersPage() {
                                     <input
                                       checked={checked}
                                       className="h-3.5 w-3.5 rounded border-slate-300"
-                                      disabled={!isSuperAdmin || isSaving || isSelf || module.id === "dashboard"}
+                                      disabled={!isSuperAdmin || isSaving || isSelf || required}
                                       onChange={() => toggleModule(user, module.id)}
                                       type="checkbox"
                                     />

@@ -31,6 +31,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SubjectsPage } from "./pages/SubjectsPage";
 import { TeacherLoadsPage } from "./pages/TeacherLoadsPage";
 import { TeachersPage } from "./pages/TeachersPage";
+import { TosiaProPage } from "./pages/TosiaProPage";
 import { UsersPage } from "./pages/UsersPage";
 
 export default function App() {
@@ -74,6 +75,9 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute requiredModule="document_requests" />}>
             <Route path="/document-requests" element={<DocumentRequestsPage />} />
+          </Route>
+          <Route element={<ProtectedRoute requiredModule="tosia_pro" />}>
+            <Route path="/tosia-pro" element={<TosiaProPage />} />
           </Route>
           <Route element={<ProtectedRoute requiredModule="mps" />}>
             <Route path="/mps" element={<MpsPage />} />

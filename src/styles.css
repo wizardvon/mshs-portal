@@ -30,6 +30,215 @@ textarea {
   color: #1f2937;
 }
 
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
 ::placeholder {
   color: #9ca3af;
+}
+
+.portal-theme-academic_blue .bg-civic,
+.portal-theme-academic_blue .group:hover .group-hover\:bg-civic {
+  background-color: #1d4ed8 !important;
+}
+
+.portal-theme-academic_blue .text-civic,
+.portal-theme-academic_blue .group:hover .group-hover\:text-civic {
+  color: #1d4ed8 !important;
+}
+
+.portal-theme-academic_blue .border-red-100,
+.portal-theme-academic_blue .border-red-200 {
+  border-color: #bfdbfe !important;
+}
+
+.portal-theme-academic_blue .bg-red-50,
+.portal-theme-academic_blue .hover\:bg-red-50:hover,
+.portal-theme-academic_blue .hover\:bg-red-50\/30:hover {
+  background-color: #eff6ff !important;
+}
+
+.portal-theme-academic_blue .ring-red-100,
+.portal-theme-academic_blue .ring-red-200 {
+  --tw-ring-color: #bfdbfe !important;
+}
+
+.portal-theme-academic_blue .from-wine {
+  --tw-gradient-from: #1e3a8a var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgb(30 58 138 / 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+.portal-theme-academic_blue .to-civic {
+  --tw-gradient-to: #1d4ed8 var(--tw-gradient-to-position) !important;
+}
+
+.portal-theme-academic_blue aside {
+  background-image: linear-gradient(to bottom, #0f172a, #1e3a8a, #172554) !important;
+}
+
+.portal-theme-dark {
+  color-scheme: dark;
+}
+
+.portal-theme-dark.bg-mist,
+.portal-theme-dark .bg-mist,
+.portal-theme-dark .bg-slate-50,
+.portal-theme-dark .bg-slate-100,
+.portal-theme-dark .hover\:bg-slate-50:hover {
+  background-color: #0f172a !important;
+}
+
+.portal-theme-dark .bg-white,
+.portal-theme-dark .bg-white\/90,
+.portal-theme-dark .bg-white\/95,
+.portal-theme-dark .bg-red-50,
+.portal-theme-dark .bg-blue-50,
+.portal-theme-dark .bg-emerald-50,
+.portal-theme-dark .bg-amber-50 {
+  background-color: #172033 !important;
+}
+
+.portal-theme-dark .border-slate-100,
+.portal-theme-dark .border-slate-200,
+.portal-theme-dark .border-slate-300,
+.portal-theme-dark .border-red-100,
+.portal-theme-dark .border-red-200,
+.portal-theme-dark .border-blue-100,
+.portal-theme-dark .border-amber-200,
+.portal-theme-dark .border-emerald-200 {
+  border-color: #334155 !important;
+}
+
+.portal-theme-dark .text-ink,
+.portal-theme-dark .text-slate-950,
+.portal-theme-dark .text-slate-900,
+.portal-theme-dark .text-slate-800,
+.portal-theme-dark .text-slate-700,
+.portal-theme-dark .font-bold {
+  color: #f8fafc !important;
+}
+
+.portal-theme-dark .text-slate-600,
+.portal-theme-dark .text-slate-500,
+.portal-theme-dark .text-muted {
+  color: #cbd5e1 !important;
+}
+
+.portal-theme-dark input,
+.portal-theme-dark select,
+.portal-theme-dark textarea {
+  border-color: #475569 !important;
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+.portal-theme-dark .shadow-sm,
+.portal-theme-dark .shadow-md,
+.portal-theme-dark .shadow-2xl {
+  --tw-shadow-color: rgb(2 6 23 / 0.45) !important;
+}
+
+.portal-theme-dark aside {
+  background-image: linear-gradient(to bottom, #020617, #111827, #020617) !important;
+}
+
+.portal-theme-high_contrast {
+  color: #000;
+}
+
+.portal-theme-high_contrast.bg-mist,
+.portal-theme-high_contrast .bg-mist,
+.portal-theme-high_contrast .bg-slate-50,
+.portal-theme-high_contrast .bg-red-50,
+.portal-theme-high_contrast .bg-blue-50,
+.portal-theme-high_contrast .bg-emerald-50,
+.portal-theme-high_contrast .bg-amber-50 {
+  background-color: #fff !important;
+}
+
+.portal-theme-high_contrast .bg-civic,
+.portal-theme-high_contrast .group:hover .group-hover\:bg-civic {
+  background-color: #000 !important;
+}
+
+.portal-theme-high_contrast .text-civic,
+.portal-theme-high_contrast .text-ink,
+.portal-theme-high_contrast .text-slate-950,
+.portal-theme-high_contrast .text-slate-900,
+.portal-theme-high_contrast .text-slate-800,
+.portal-theme-high_contrast .text-slate-700,
+.portal-theme-high_contrast .text-slate-600,
+.portal-theme-high_contrast .text-slate-500 {
+  color: #000 !important;
+}
+
+.portal-theme-high_contrast .border-slate-100,
+.portal-theme-high_contrast .border-slate-200,
+.portal-theme-high_contrast .border-slate-300,
+.portal-theme-high_contrast .border-red-100,
+.portal-theme-high_contrast .border-red-200,
+.portal-theme-high_contrast .border-blue-100,
+.portal-theme-high_contrast .border-amber-200,
+.portal-theme-high_contrast .border-emerald-200 {
+  border-color: #000 !important;
+}
+
+.portal-theme-high_contrast input,
+.portal-theme-high_contrast select,
+.portal-theme-high_contrast textarea {
+  border-color: #000 !important;
+  color: #000 !important;
+}
+
+.portal-theme-high_contrast aside {
+  background-image: none !important;
+  background-color: #000 !important;
+}
+
+.portal-density-compact .p-6 {
+  padding: 1.125rem !important;
+}
+
+.portal-density-compact .p-5 {
+  padding: 1rem !important;
+}
+
+.portal-density-compact .p-4 {
+  padding: 0.875rem !important;
+}
+
+.portal-density-compact .px-5 {
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+}
+
+.portal-density-compact .py-6 {
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+
+.portal-density-compact .gap-4,
+.portal-density-compact .gap-5 {
+  gap: 0.75rem !important;
+}
+
+.portal-density-compact .mt-6 {
+  margin-top: 1rem !important;
+}
+
+.portal-density-compact .mt-5 {
+  margin-top: 0.875rem !important;
+}
+
+.portal-density-comfortable .h-10 {
+  min-height: 2.5rem;
 }

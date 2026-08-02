@@ -12,6 +12,7 @@ import {
   Hourglass,
   Printer,
   ShieldCheck,
+  Trash2,
   UserCheck,
   UserCog,
   UserRoundCheck,
@@ -29,10 +30,11 @@ import { subscribeMpsRequests, subscribeMpsSubmissions } from "../services/mpsSe
 import { subscribeObservationSchedules } from "../services/observationService";
 import { defaultAcademicSettings, subscribeAcademicSettings } from "../services/settingsService";
 import { subscribeTeachers } from "../services/teacherService";
+import { deleteTosiaAssessment, subscribeTosiaAssessments, subscribeTosiaRequests } from "../services/tosiaService";
 import { exportPortalWorkbook } from "../services/portalExportService";
 import { useAuth } from "../providers/AuthProvider";
 import type { UserProfile, UserRole } from "../types";
-import type { AcademicTerm, DllRequest, DllSubmission, LoadAssignment, MpsRequest, MpsSubmission, ObservationSchedule, PersonnelAttendanceRecord, Section, Subject, Teacher } from "../types/loading";
+import type { AcademicTerm, DllRequest, DllSubmission, LoadAssignment, MpsRequest, MpsSubmission, ObservationSchedule, PersonnelAttendanceRecord, Section, Subject, Teacher, TosiaAssessment, TosiaItemResponse, TosiaRequest } from "../types/loading";
 import { defaultSchoolYear, defaultTerm, termOptions } from "../types/loading";
 import { buildTeacherLoadSummaries } from "../utils/loadCalculations";
 import { getRoleLabel, roleOptions } from "../utils/accessControl";
@@ -82,6 +84,40 @@ type MpsSubmissionStatusRow = {
   mps: string;
 };
 
+type TosiaAssessmentSummary = {
+  mappedItems: number;
+  mean: number;
+  sd: number;
+  mps: number;
+  lmc: string;
+  mmc: string;
+};
+
+type TosiaSubjectSummaryRow = {
+  subjectKey: string;
+  subjectName: string;
+  gradeLevels: string;
+  sectionCount: number;
+  totalStudents: number;
+  totalItems: number;
+  mappedItems: number;
+  averageMps: number;
+  mean: number;
+  sd: number;
+  leastMastered: string;
+  mostMastered: string;
+};
+
+type TosiaCompetencyMasteryRow = {
+  content: string;
+  itemCount: number;
+  sectionCount: number;
+  totalCorrect: number;
+  totalPossible: number;
+  averagePercent: number;
+  interpretation: ReturnType<typeof mpsInterpretation>;
+};
+
 const attendanceStatusLabels: Record<PersonnelAttendanceRecord["status"], string> = {
   present: "Present",
   absent: "Absent",
@@ -126,6 +162,13 @@ function formatDateTime(value?: { toDate?: () => Date }) {
   }).format(date);
 }
 
+function formatDate(value?: string) {
+  if (!value) return "Not set";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
 function getAverage(values: number[]) {
   if (values.length === 0) return 0;
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100;
@@ -133,6 +176,10 @@ function getAverage(values: number[]) {
 
 function formatAverage(value: number) {
   return value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function joinUnique(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).join("; ");
 }
 
 function getDllSubmissionKey(requestId: string, teacherId: string, subjectId: string) {
@@ -143,8 +190,135 @@ function getMpsSubmissionKey(requestId: string, teacherId: string, subjectId: st
   return `${requestId}:${teacherId}:${subjectId}:${sectionId}`;
 }
 
+function getTosiaClassKey(requestId: string, teacherId: string, subjectId: string, sectionId: string) {
+  return `${requestId}:${teacherId}:${subjectId}:${sectionId}`;
+}
+
 function getUniqueClassCount(assignments: LoadAssignment[]) {
   return new Set(assignments.map((assignment) => `${assignment.subjectId}:${assignment.sectionId}`)).size;
+}
+
+function round(value: number, digits = 2) {
+  if (!Number.isFinite(value)) return 0;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function standardDeviation(values: number[]) {
+  if (values.length === 0) return 0;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function mpsInterpretation(percent: number) {
+  if (percent >= 96) return { label: "Mastered", code: "M" };
+  if (percent >= 86) return { label: "Closely Approximating Mastery", code: "CAM" };
+  if (percent >= 66) return { label: "Moving Towards Mastery", code: "MTM" };
+  if (percent >= 35) return { label: "Average Mastery", code: "AM" };
+  if (percent >= 15) return { label: "Low Mastery", code: "LM" };
+  if (percent >= 5) return { label: "Very Low Mastery", code: "VLM" };
+  return { label: "Absolutely No Mastery", code: "ANM" };
+}
+
+function chunkRows<T>(rows: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < rows.length; index += size) {
+    chunks.push(rows.slice(index, index + size));
+  }
+  return chunks.length ? chunks : [[]];
+}
+
+function summarizeTosiaAssessment(assessment: Pick<TosiaAssessment, "competencies" | "itemResponses" | "totalItems" | "totalStudents">): TosiaAssessmentSummary {
+  const itemsByCompetency = new Map<string, TosiaItemResponse[]>();
+  assessment.itemResponses.forEach((item) => {
+    if (!item.competencyId) return;
+    itemsByCompetency.set(item.competencyId, [...(itemsByCompetency.get(item.competencyId) ?? []), item]);
+  });
+
+  const rankedCompetencies = assessment.competencies
+    .filter((competency) => competency.content.trim() && (itemsByCompetency.get(competency.competencyId)?.length ?? 0) > 0)
+    .map((competency) => {
+      const items = itemsByCompetency.get(competency.competencyId) ?? [];
+      const averagePercent =
+        assessment.totalStudents > 0 && items.length > 0
+          ? items.reduce((sum, item) => sum + (Number(item.correctResponses || 0) / assessment.totalStudents) * 100, 0) / items.length
+          : 0;
+
+      return { content: competency.content, averagePercent };
+    })
+    .sort((first, second) => first.averagePercent - second.averagePercent);
+  const correctValues = assessment.itemResponses.map((item) => Number(item.correctResponses || 0));
+  const totalCorrect = correctValues.reduce((sum, value) => sum + value, 0);
+  const mps = assessment.totalStudents > 0 && assessment.totalItems > 0
+    ? (totalCorrect / (assessment.totalStudents * assessment.totalItems)) * 100
+    : 0;
+
+  return {
+    mappedItems: assessment.itemResponses.filter((item) => item.competencyId).length,
+    mean: correctValues.length ? totalCorrect / correctValues.length : 0,
+    sd: standardDeviation(correctValues),
+    mps,
+    lmc: rankedCompetencies[0]?.content || "No mapped competency",
+    mmc: rankedCompetencies[rankedCompetencies.length - 1]?.content || "No mapped competency",
+  };
+}
+
+function getTosiaCompetencyMasteryRows(assessments: TosiaAssessment[]): TosiaCompetencyMasteryRow[] {
+  const grouped = new Map<
+    string,
+    {
+      content: string;
+      itemCount: number;
+      assessmentKeys: Set<string>;
+      totalCorrect: number;
+      totalPossible: number;
+    }
+  >();
+
+  assessments.forEach((assessment) => {
+    const competencyById = new Map(
+      assessment.competencies
+        .filter((competency) => competency.content.trim())
+        .map((competency) => [competency.competencyId, competency.content.trim()]),
+    );
+
+    assessment.itemResponses.forEach((item) => {
+      const content = competencyById.get(item.competencyId);
+      if (!content) return;
+
+      const key = content.toLowerCase();
+      const current = grouped.get(key) ?? {
+        content,
+        itemCount: 0,
+        assessmentKeys: new Set<string>(),
+        totalCorrect: 0,
+        totalPossible: 0,
+      };
+
+      current.itemCount += 1;
+      current.assessmentKeys.add(assessment.assessmentId || `${assessment.subjectName}:${assessment.sectionName}:${assessment.teacherName}`);
+      current.totalCorrect += Number(item.correctResponses || 0);
+      current.totalPossible += Number(assessment.totalStudents || 0);
+      grouped.set(key, current);
+    });
+  });
+
+  return Array.from(grouped.values())
+    .map((row) => {
+      const averagePercent = row.totalPossible > 0 ? (row.totalCorrect / row.totalPossible) * 100 : 0;
+
+      return {
+        content: row.content,
+        itemCount: row.itemCount,
+        sectionCount: row.assessmentKeys.size,
+        totalCorrect: row.totalCorrect,
+        totalPossible: row.totalPossible,
+        averagePercent,
+        interpretation: mpsInterpretation(averagePercent),
+      };
+    })
+    .sort((first, second) => first.averagePercent - second.averagePercent || first.content.localeCompare(second.content));
 }
 
 function getRequestTerm(request: DllRequest | MpsRequest, selectedTerm: AcademicTerm | "all") {
@@ -367,6 +541,291 @@ function printSummaryReport(
   reportWindow.document.close();
 }
 
+function printTosiaSummaryReport(request: TosiaRequest, assessments: TosiaAssessment[], assignments: LoadAssignment[]) {
+  const reportWindow = window.open("", "_blank", "width=1200,height=850");
+  if (!reportWindow) return;
+
+  const requestAssessments = assessments
+    .filter((assessment) => assessment.requestId === request.requestId)
+    .sort((first, second) => `${first.gradeLevel} ${first.sectionName} ${first.subjectName}`.localeCompare(`${second.gradeLevel} ${second.sectionName} ${second.subjectName}`));
+  const expectedClassCount = new Set(
+    assignments
+      .filter((assignment) => assignment.schoolYear === request.schoolYear && assignment.term === request.term)
+      .map((assignment) => getTosiaClassKey(request.requestId, assignment.teacherId, assignment.subjectId, assignment.sectionId)),
+  ).size;
+  const submittedClassCount = new Set(
+    requestAssessments.map((assessment) => getTosiaClassKey(request.requestId, assessment.teacherId, assessment.subjectId ?? "", assessment.sectionId ?? "")),
+  ).size;
+  const teacherCount = new Set(requestAssessments.map((assessment) => assessment.teacherId || assessment.teacherName)).size;
+  const totalStudents = requestAssessments.reduce((sum, assessment) => sum + Number(assessment.totalStudents || 0), 0);
+  const totalItems = requestAssessments.reduce((sum, assessment) => sum + Number(assessment.totalItems || assessment.itemResponses.length || 0), 0);
+  const correctValues = requestAssessments.flatMap((assessment) => assessment.itemResponses.map((item) => Number(item.correctResponses || 0)));
+  const totalCorrect = correctValues.reduce((sum, value) => sum + value, 0);
+  const totalPossible = requestAssessments.reduce(
+    (sum, assessment) => sum + Number(assessment.totalStudents || 0) * Number(assessment.totalItems || assessment.itemResponses.length || 0),
+    0,
+  );
+  const overallMps = totalPossible > 0 ? (totalCorrect / totalPossible) * 100 : 0;
+  const overallInterpretation = mpsInterpretation(overallMps);
+  const rows = requestAssessments.map((assessment, index) => {
+    const assessmentSummary = summarizeTosiaAssessment(assessment);
+    const interpretation = mpsInterpretation(assessmentSummary.mps);
+
+    return `<tr>
+      <td class="center">${index + 1}</td>
+      <td>${escapeHtml(assessment.teacherName)}</td>
+      <td>${escapeHtml(assessment.subjectName)}</td>
+      <td>${escapeHtml(assessment.sectionName)}</td>
+      <td class="center">${escapeHtml(`${assessment.gradeLevel} ${assessment.strand}`.trim())}</td>
+      <td class="center">${assessment.totalStudents}</td>
+      <td class="center">${assessment.totalItems}</td>
+      <td class="center">${assessmentSummary.mappedItems}/${assessment.totalItems}</td>
+      <td class="center">${round(assessmentSummary.mps, 2)}%</td>
+      <td>${escapeHtml(interpretation.code)}</td>
+      <td>${escapeHtml(assessmentSummary.lmc)}</td>
+      <td>${escapeHtml(assessmentSummary.mmc)}</td>
+    </tr>`;
+  });
+  const emptyRow = `<tr><td colspan="12" class="center">No TOSIA Pro assessments have been submitted for this request.</td></tr>`;
+  const rowChunks = chunkRows(rows.length ? rows : [emptyRow], 15);
+  const renderPage = (chunk: string[], index: number) => {
+    const isFirstPage = index === 0;
+    const isLastPage = index === rowChunks.length - 1;
+    const signatorySource = requestAssessments[0];
+
+    return `<main class="print-page">
+      <div class="print-content">
+        <header class="report-heading">
+          <h1>${escapeHtml(isFirstPage ? "Summary of TOSIA Pro" : "Summary of TOSIA Pro Continued")}</h1>
+          <p>${escapeHtml(request.testName)} | ${escapeHtml(request.term)}, S.Y. ${escapeHtml(request.schoolYear)}</p>
+          <p>${escapeHtml(request.title)}${request.dueDate ? ` | Due ${escapeHtml(formatDate(request.dueDate))}` : ""}</p>
+        </header>
+        ${isFirstPage ? `<h2>Summary of Request</h2>
+          <table>
+            <tbody>
+              <tr><th>Expected Classes</th><td class="center">${expectedClassCount}</td><th>Submitted Classes</th><td class="center">${submittedClassCount}</td><th>Teachers Submitted</th><td class="center">${teacherCount}</td></tr>
+              <tr><th>Total Students</th><td class="center">${totalStudents}</td><th>Total Submitted Items</th><td class="center">${totalItems}</td><th>Overall MPS</th><td class="center">${round(overallMps, 2)}%</td></tr>
+              <tr><th>Mean</th><td class="center">${round(correctValues.length ? totalCorrect / correctValues.length : 0, 2)}</td><th>Standard Deviation</th><td class="center">${round(standardDeviation(correctValues), 2)}</td><th>Verbal Interpretation</th><td>${escapeHtml(overallInterpretation.label)} (${escapeHtml(overallInterpretation.code)})</td></tr>
+            </tbody>
+          </table>` : ""}
+        <h2>Class Summary</h2>
+        <table>
+          <thead><tr><th>No.</th><th>Teacher</th><th>Subject</th><th>Section</th><th>Grade / Strand</th><th>Students</th><th>Items</th><th>Mapped</th><th>MPS</th><th>VI</th><th>Least Mastered</th><th>Most Mastered</th></tr></thead>
+          <tbody>${chunk.join("")}</tbody>
+        </table>
+        ${isLastPage ? `<section class="signatures">
+          <div><strong>${escapeHtml(signatorySource?.preparedBy || "Prepared by")}</strong><p>${escapeHtml(signatorySource?.preparedByPosition || "")}</p></div>
+          <div><strong>${escapeHtml(signatorySource?.checkedBy || "Checked by")}</strong><p>${escapeHtml(signatorySource?.checkedByPosition || "")}</p></div>
+          <div><strong>${escapeHtml(signatorySource?.notedBy || "Noted by")}</strong><p>${escapeHtml(signatorySource?.notedByPosition || "")}</p></div>
+        </section>` : ""}
+      </div>
+    </main>`;
+  };
+
+  reportWindow.document.write(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Summary of TOSIA Pro</title>
+    <style>
+      * { box-sizing: border-box; }
+      @page { size: A4 landscape; margin: 0; }
+      body { background: #e5e7eb; color: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 10px; margin: 0; }
+      .no-print { position: fixed; z-index: 20; top: 10px; left: 10px; border: 0; border-radius: 8px; background: #7f1d1d; color: white; cursor: pointer; font: 700 12px Arial, sans-serif; padding: 9px 12px; }
+      .print-page { position: relative; width: 297mm; height: 210mm; margin: 0 auto; overflow: hidden; background: white; break-after: page; page-break-after: always; }
+      .print-page:last-child { break-after: auto; page-break-after: auto; }
+      .print-content { position: relative; z-index: 1; height: 100%; padding: 12mm 10mm; font-size: 10px; }
+      .report-heading { border-bottom: 1.5px solid #111827; margin-bottom: 8px; padding-bottom: 5px; text-align: center; }
+      h1 { font-size: 14px; margin: 0 0 3px; text-transform: uppercase; }
+      h2 { font-size: 10px; margin: 9px 0 4px; }
+      p { font-size: 10px; margin: 2px 0; }
+      table { border-collapse: collapse; font-size: 9px; margin-bottom: 8px; width: 100%; page-break-inside: auto; }
+      thead { display: table-header-group; }
+      tr { break-inside: avoid; page-break-inside: avoid; }
+      th, td { border: 1px solid #94a3b8; padding: 2px 4px; text-align: left; vertical-align: top; }
+      th { background: #e2e8f0; font-weight: 700; }
+      .center { text-align: center; }
+      .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 24px; page-break-inside: avoid; }
+      .signatures div { text-align: center; }
+      .signatures strong { border-top: 1px solid #111827; display: block; font-size: 10px; padding-top: 5px; }
+      @media screen {
+        body { padding: 18px 0; }
+        .print-page { box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18); margin-bottom: 18px; }
+      }
+      @media print {
+        body { background: white; }
+        .no-print { display: none; }
+        .print-page { margin: 0; box-shadow: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <button class="no-print" onclick="window.print()">Print / Save as PDF</button>
+    ${rowChunks.map(renderPage).join("")}
+    <script>window.onload = () => { window.focus(); setTimeout(() => window.print(), 250); };</script>
+  </body>
+</html>`);
+  reportWindow.document.close();
+}
+
+function printTosiaSubjectSummaryReport(request: TosiaRequest, assessments: TosiaAssessment[]) {
+  const reportWindow = window.open("", "_blank", "width=1200,height=850");
+  if (!reportWindow) return;
+
+  const requestAssessments = assessments
+    .filter((assessment) => assessment.requestId === request.requestId)
+    .sort((first, second) => `${first.subjectName} ${first.gradeLevel} ${first.sectionName}`.localeCompare(`${second.subjectName} ${second.gradeLevel} ${second.sectionName}`));
+  const grouped = new Map<string, TosiaAssessment[]>();
+
+  requestAssessments.forEach((assessment) => {
+    const subjectKey = assessment.subjectId || assessment.subjectName.trim().toLowerCase();
+    grouped.set(subjectKey, [...(grouped.get(subjectKey) ?? []), assessment]);
+  });
+
+  const subjectPages = Array.from(grouped.values())
+    .map((records) => {
+      const summaries = records.map((assessment) => summarizeTosiaAssessment(assessment));
+      const correctValues = records.flatMap((assessment) => assessment.itemResponses.map((item) => Number(item.correctResponses || 0)));
+      const totalCorrect = correctValues.reduce((sum, value) => sum + value, 0);
+      const totalPossible = records.reduce(
+        (sum, assessment) => sum + Number(assessment.totalStudents || 0) * Number(assessment.totalItems || assessment.itemResponses.length || 0),
+        0,
+      );
+      const subjectMps = totalPossible > 0 ? (totalCorrect / totalPossible) * 100 : 0;
+      const subjectInterpretation = mpsInterpretation(subjectMps);
+      const totalStudents = records.reduce((sum, assessment) => sum + Number(assessment.totalStudents || 0), 0);
+      const totalItems = records.reduce((sum, assessment) => sum + Number(assessment.totalItems || assessment.itemResponses.length || 0), 0);
+      const mappedItems = summaries.reduce((sum, summary) => sum + summary.mappedItems, 0);
+      const gradeLevels = Array.from(new Set(records.map((record) => `${record.gradeLevel} ${record.strand}`.trim()).filter(Boolean))).sort().join(", ") || "-";
+      const masteryRows = getTosiaCompetencyMasteryRows(records);
+      const signatorySource = records[0];
+      const sectionRows = records
+        .map((assessment, index) => {
+          const assessmentSummary = summarizeTosiaAssessment(assessment);
+          const interpretation = mpsInterpretation(assessmentSummary.mps);
+
+          return `<tr>
+            <td class="center">${index + 1}</td>
+            <td>${escapeHtml(assessment.sectionName)}</td>
+            <td>${escapeHtml(`${assessment.gradeLevel} ${assessment.strand}`.trim() || "-")}</td>
+            <td>${escapeHtml(assessment.teacherName)}</td>
+            <td class="center">${assessment.totalStudents}</td>
+            <td class="center">${assessment.totalItems}</td>
+            <td class="center">${assessmentSummary.mappedItems}/${assessment.totalItems}</td>
+            <td class="center">${round(assessmentSummary.mean, 2)}</td>
+            <td class="center">${round(assessmentSummary.sd, 2)}</td>
+            <td class="center">${round(assessmentSummary.mps, 2)}%</td>
+            <td class="center">${escapeHtml(interpretation.code)}</td>
+            <td>${escapeHtml(assessmentSummary.lmc)}</td>
+            <td>${escapeHtml(assessmentSummary.mmc)}</td>
+          </tr>`;
+        })
+        .join("");
+      const masteryTableRows = masteryRows.length
+        ? masteryRows
+            .map(
+              (row, index) => `<tr>
+                <td class="center">${index + 1}</td>
+                <td>${escapeHtml(row.content)}</td>
+                <td class="center">${row.sectionCount}</td>
+                <td class="center">${row.itemCount}</td>
+                <td class="center">${round(row.totalCorrect, 2)}/${round(row.totalPossible, 2)}</td>
+                <td class="center">${round(row.averagePercent, 2)}%</td>
+                <td>${escapeHtml(row.interpretation.label)} (${escapeHtml(row.interpretation.code)})</td>
+              </tr>`,
+            )
+            .join("")
+        : `<tr><td colspan="7" class="center">No mapped competency/content found.</td></tr>`;
+
+      return `<section class="subject-page">
+        <header class="report-heading">
+          <h1>Summary Per Subject of TOSIA Pro</h1>
+          <p>${escapeHtml(request.testName)} | ${escapeHtml(request.term)}, S.Y. ${escapeHtml(request.schoolYear)}</p>
+          <p>${escapeHtml(records[0].subjectName)} | ${escapeHtml(gradeLevels)}</p>
+        </header>
+
+        <h2>Subject Summary</h2>
+        <table>
+          <tbody>
+            <tr><th>Subject</th><td>${escapeHtml(records[0].subjectName)}</td><th>Grade / Strand</th><td>${escapeHtml(gradeLevels)}</td><th>Sections</th><td class="center">${records.length}</td></tr>
+            <tr><th>Total Students</th><td class="center">${totalStudents}</td><th>Total Submitted Items</th><td class="center">${totalItems}</td><th>Mapped Items</th><td class="center">${mappedItems}/${totalItems}</td></tr>
+            <tr><th>Mean</th><td class="center">${round(correctValues.length ? totalCorrect / correctValues.length : 0, 2)}</td><th>Standard Deviation</th><td class="center">${round(standardDeviation(correctValues), 2)}</td><th>MPS / VI</th><td>${round(subjectMps, 2)}% - ${escapeHtml(subjectInterpretation.label)} (${escapeHtml(subjectInterpretation.code)})</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Least to Most Mastered Content/Competency</h2>
+        <table>
+          <thead><tr><th>No.</th><th>Content/Competency</th><th>Sections</th><th>Mapped Items</th><th>Correct / Possible</th><th>Mastery</th><th>Verbal Interpretation</th></tr></thead>
+          <tbody>${masteryTableRows}</tbody>
+        </table>
+
+        <h2>Section Details</h2>
+        <table>
+          <thead><tr><th>No.</th><th>Section</th><th>Grade / Strand</th><th>Teacher</th><th>Students</th><th>Items</th><th>Mapped</th><th>Mean</th><th>SD</th><th>MPS</th><th>VI</th><th>Least Mastered</th><th>Most Mastered</th></tr></thead>
+          <tbody>${sectionRows || `<tr><td colspan="13" class="center">No TOSIA Pro assessments have been submitted for this subject.</td></tr>`}</tbody>
+        </table>
+
+        <section class="signatures">
+          <div><strong>${escapeHtml(signatorySource?.preparedBy || "Prepared by")}</strong><p>${escapeHtml(signatorySource?.preparedByPosition || "")}</p></div>
+          <div><strong>${escapeHtml(signatorySource?.checkedBy || "Checked by")}</strong><p>${escapeHtml(signatorySource?.checkedByPosition || "")}</p></div>
+          <div><strong>${escapeHtml(signatorySource?.notedBy || "Noted by")}</strong><p>${escapeHtml(signatorySource?.notedByPosition || "")}</p></div>
+        </section>
+      </section>`;
+    })
+    .join("");
+  const emptyPage = `<section class="subject-page">
+    <header class="report-heading">
+      <h1>Summary Per Subject of TOSIA Pro</h1>
+      <p>${escapeHtml(request.testName)} | ${escapeHtml(request.term)}, S.Y. ${escapeHtml(request.schoolYear)}</p>
+    </header>
+    <p>No TOSIA Pro assessments have been submitted for this request.</p>
+  </section>`;
+
+  reportWindow.document.write(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Summary Per Subject of TOSIA Pro</title>
+    <style>
+      * { box-sizing: border-box; }
+      @page { size: A4 landscape; margin: 12mm 10mm; }
+      body { background: #e5e7eb; color: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 10px; margin: 0; }
+      .no-print { position: fixed; z-index: 20; top: 10px; left: 10px; border: 0; border-radius: 8px; background: #7f1d1d; color: white; cursor: pointer; font: 700 12px Arial, sans-serif; padding: 9px 12px; }
+      .subject-page { background: white; margin: 0 auto 18px; max-width: 277mm; min-height: 186mm; padding: 0; break-after: page; page-break-after: always; }
+      .subject-page:last-child { break-after: auto; page-break-after: auto; }
+      .report-heading { border-bottom: 1.5px solid #111827; margin-bottom: 8px; padding-bottom: 5px; text-align: center; }
+      h1 { font-size: 14px; margin: 0 0 3px; text-transform: uppercase; }
+      h2 { font-size: 10px; margin: 9px 0 4px; text-transform: uppercase; }
+      p { font-size: 10px; margin: 2px 0; }
+      table { border-collapse: collapse; font-size: 9px; margin-bottom: 8px; width: 100%; page-break-inside: auto; }
+      thead { display: table-header-group; }
+      tr { break-inside: avoid; page-break-inside: avoid; }
+      th, td { border: 1px solid #94a3b8; padding: 2px 4px; text-align: left; vertical-align: top; }
+      th { background: #e2e8f0; font-weight: 700; }
+      .center { text-align: center; }
+      .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; margin-top: 24px; page-break-inside: avoid; }
+      .signatures div { text-align: center; }
+      .signatures strong { border-top: 1px solid #111827; display: block; font-size: 10px; padding-top: 5px; }
+      @media screen {
+        body { padding: 18px 0; }
+        .subject-page { box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18); padding: 12mm 10mm; }
+      }
+      @media print {
+        body { background: white; }
+        .no-print { display: none; }
+        .subject-page { box-shadow: none; margin: 0; max-width: none; min-height: 0; padding: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <button class="no-print" onclick="window.print()">Print / Save as PDF</button>
+    ${subjectPages || emptyPage}
+    <script>window.onload = () => { window.focus(); setTimeout(() => window.print(), 250); };</script>
+  </body>
+</html>`);
+  reportWindow.document.close();
+}
+
 export function LoadingReportsPage() {
   const { profile } = useAuth();
   const today = getTodayInputValue();
@@ -380,6 +839,8 @@ export function LoadingReportsPage() {
   const [dllSubmissions, setDllSubmissions] = useState<DllSubmission[]>([]);
   const [mpsRequests, setMpsRequests] = useState<MpsRequest[]>([]);
   const [mpsSubmissions, setMpsSubmissions] = useState<MpsSubmission[]>([]);
+  const [tosiaRequests, setTosiaRequests] = useState<TosiaRequest[]>([]);
+  const [tosiaAssessments, setTosiaAssessments] = useState<TosiaAssessment[]>([]);
   const [observationSchedules, setObservationSchedules] = useState<ObservationSchedule[]>([]);
   const [attendanceStartDate, setAttendanceStartDate] = useState(today);
   const [attendanceEndDate, setAttendanceEndDate] = useState(today);
@@ -388,8 +849,13 @@ export function LoadingReportsPage() {
   const [term, setTerm] = useState<AcademicTerm | "all">(defaultAcademicSettings.currentTerm);
   const [selectedDllTeacherId, setSelectedDllTeacherId] = useState("");
   const [selectedMpsSubjectId, setSelectedMpsSubjectId] = useState("");
+  const [selectedTosiaRequestId, setSelectedTosiaRequestId] = useState("");
+  const [selectedTosiaSubjectKey, setSelectedTosiaSubjectKey] = useState("");
   const [selectedObservationTeacherId, setSelectedObservationTeacherId] = useState("");
   const [isExportingPortal, setIsExportingPortal] = useState(false);
+  const [deletingTosiaAssessmentId, setDeletingTosiaAssessmentId] = useState("");
+  const [tosiaActionMessage, setTosiaActionMessage] = useState("");
+  const [tosiaActionError, setTosiaActionError] = useState("");
   const isSuperAdmin = profile?.role === "super_admin";
 
   useEffect(() => subscribeTeachers(setTeachers), []);
@@ -401,6 +867,8 @@ export function LoadingReportsPage() {
   useEffect(() => subscribeDllSubmissions(setDllSubmissions), []);
   useEffect(() => subscribeMpsRequests(setMpsRequests), []);
   useEffect(() => subscribeMpsSubmissions(setMpsSubmissions), []);
+  useEffect(() => subscribeTosiaRequests(setTosiaRequests), []);
+  useEffect(() => subscribeTosiaAssessments(setTosiaAssessments), []);
   useEffect(() => subscribeObservationSchedules(setObservationSchedules), []);
   useEffect(
     () =>
@@ -741,6 +1209,112 @@ export function LoadingReportsPage() {
     });
   }, [assignments, filteredMpsRequests, filteredMpsSubmissions, sectionsById, subjectsById, teachersById]);
 
+  const filteredTosiaRequests = useMemo(
+    () =>
+      tosiaRequests
+        .filter((request) => request.schoolYear === schoolYear)
+        .filter((request) => term === "all" || request.term === term),
+    [schoolYear, term, tosiaRequests],
+  );
+
+  const selectedTosiaRequest = useMemo(
+    () => filteredTosiaRequests.find((request) => request.requestId === selectedTosiaRequestId) ?? filteredTosiaRequests[0],
+    [filteredTosiaRequests, selectedTosiaRequestId],
+  );
+
+  const selectedTosiaAssessments = useMemo(
+    () =>
+      selectedTosiaRequest
+        ? tosiaAssessments
+            .filter((assessment) => assessment.requestId === selectedTosiaRequest.requestId)
+            .sort((first, second) => `${first.subjectName} ${first.sectionName}`.localeCompare(`${second.subjectName} ${second.sectionName}`))
+        : [],
+    [selectedTosiaRequest, tosiaAssessments],
+  );
+
+  const tosiaSummary = useMemo(() => {
+    const expectedClasses = selectedTosiaRequest
+      ? new Set(
+          assignments
+            .filter((assignment) => assignment.schoolYear === selectedTosiaRequest.schoolYear && assignment.term === selectedTosiaRequest.term)
+            .map((assignment) => getTosiaClassKey(selectedTosiaRequest.requestId, assignment.teacherId, assignment.subjectId, assignment.sectionId)),
+        ).size
+      : 0;
+    const submittedClasses = selectedTosiaRequest
+      ? new Set(
+          selectedTosiaAssessments.map((assessment) => getTosiaClassKey(selectedTosiaRequest.requestId, assessment.teacherId, assessment.subjectId ?? "", assessment.sectionId ?? "")),
+        ).size
+      : 0;
+    const totalPossible = selectedTosiaAssessments.reduce(
+      (sum, assessment) => sum + Number(assessment.totalStudents || 0) * Number(assessment.totalItems || assessment.itemResponses.length || 0),
+      0,
+    );
+    const totalCorrect = selectedTosiaAssessments.reduce(
+      (sum, assessment) => sum + assessment.itemResponses.reduce((itemSum, item) => itemSum + Number(item.correctResponses || 0), 0),
+      0,
+    );
+
+    return {
+      requests: filteredTosiaRequests.length,
+      activeRequests: filteredTosiaRequests.filter((request) => request.status === "active").length,
+      expectedClasses,
+      submittedClasses,
+      teachersSubmitted: new Set(selectedTosiaAssessments.map((assessment) => assessment.teacherId || assessment.teacherName)).size,
+      overallMps: totalPossible > 0 ? (totalCorrect / totalPossible) * 100 : 0,
+    };
+  }, [assignments, filteredTosiaRequests, selectedTosiaAssessments, selectedTosiaRequest]);
+
+  const tosiaSubjectSummaryRows = useMemo<TosiaSubjectSummaryRow[]>(() => {
+    const grouped = new Map<string, TosiaAssessment[]>();
+
+    selectedTosiaAssessments.forEach((assessment) => {
+      const subjectKey = assessment.subjectId || assessment.subjectName.trim().toLowerCase();
+      grouped.set(subjectKey, [...(grouped.get(subjectKey) ?? []), assessment]);
+    });
+
+    return Array.from(grouped.entries())
+      .map(([subjectKey, records]) => {
+        const summaries = records.map((assessment) => summarizeTosiaAssessment(assessment));
+        const correctValues = records.flatMap((assessment) => assessment.itemResponses.map((item) => Number(item.correctResponses || 0)));
+        const totalCorrect = correctValues.reduce((sum, value) => sum + value, 0);
+        const rankedLeast = [...summaries]
+          .filter((summary) => summary.lmc !== "No mapped competency")
+          .sort((first, second) => first.mps - second.mps);
+        const rankedMost = [...summaries]
+          .filter((summary) => summary.mmc !== "No mapped competency")
+          .sort((first, second) => second.mps - first.mps);
+
+        return {
+          subjectKey,
+          subjectName: records[0].subjectName,
+          gradeLevels: Array.from(new Set(records.map((record) => record.gradeLevel).filter(Boolean))).sort().join(", ") || "-",
+          sectionCount: new Set(records.map((record) => record.sectionId || record.sectionName)).size,
+          totalStudents: records.reduce((sum, record) => sum + Number(record.totalStudents || 0), 0),
+          totalItems: records.reduce((sum, record) => sum + Number(record.totalItems || record.itemResponses.length || 0), 0),
+          mappedItems: summaries.reduce((sum, summary) => sum + summary.mappedItems, 0),
+          averageMps: getAverage(summaries.map((summary) => summary.mps)),
+          mean: correctValues.length ? totalCorrect / correctValues.length : 0,
+          sd: standardDeviation(correctValues),
+          leastMastered: joinUnique(rankedLeast.slice(0, 3).map((summary) => summary.lmc)) || "No mapped competency",
+          mostMastered: joinUnique(rankedMost.slice(0, 3).map((summary) => summary.mmc)) || "No mapped competency",
+        };
+      })
+      .sort((first, second) => first.subjectName.localeCompare(second.subjectName));
+  }, [selectedTosiaAssessments]);
+
+  const selectedTosiaSubject = useMemo(
+    () => tosiaSubjectSummaryRows.find((subject) => subject.subjectKey === selectedTosiaSubjectKey) ?? tosiaSubjectSummaryRows[0],
+    [selectedTosiaSubjectKey, tosiaSubjectSummaryRows],
+  );
+
+  const selectedTosiaSubjectAssessments = useMemo(
+    () =>
+      selectedTosiaSubject
+        ? selectedTosiaAssessments.filter((assessment) => (assessment.subjectId || assessment.subjectName.trim().toLowerCase()) === selectedTosiaSubject.subjectKey)
+        : [],
+    [selectedTosiaAssessments, selectedTosiaSubject],
+  );
+
   const filteredObservationSchedules = useMemo(
     () =>
       observationSchedules
@@ -1015,6 +1589,46 @@ export function LoadingReportsPage() {
       ],
       selectedMpsSubjectRecords,
     );
+  }
+
+  function printTosiaSummary() {
+    if (!selectedTosiaRequest) {
+      window.alert("Select a TOSIA Pro request first.");
+      return;
+    }
+
+    printTosiaSummaryReport(selectedTosiaRequest, tosiaAssessments, assignments);
+  }
+
+  function printTosiaSubjectSummary() {
+    if (!selectedTosiaRequest) {
+      window.alert("Select a TOSIA Pro request first.");
+      return;
+    }
+
+    printTosiaSubjectSummaryReport(selectedTosiaRequest, tosiaAssessments);
+  }
+
+  async function deleteSubmittedTosiaAssessment(assessment: TosiaAssessment) {
+    if (!isSuperAdmin) return;
+
+    const label = `${assessment.subjectName} - ${assessment.sectionName} (${assessment.teacherName})`;
+    const confirmed = window.confirm(`Delete submitted TOSIA record for ${label}? This cannot be undone.`);
+    if (!confirmed) return;
+
+    setDeletingTosiaAssessmentId(assessment.assessmentId);
+    setTosiaActionMessage("");
+    setTosiaActionError("");
+
+    try {
+      await deleteTosiaAssessment(assessment.assessmentId);
+      setTosiaActionMessage(`Deleted submitted TOSIA record for ${label}.`);
+    } catch (caught) {
+      console.error(caught);
+      setTosiaActionError(caught instanceof Error ? caught.message : "Unable to delete the submitted TOSIA record.");
+    } finally {
+      setDeletingTosiaAssessmentId("");
+    }
   }
 
   function printObservationSummary() {
@@ -1339,6 +1953,222 @@ export function LoadingReportsPage() {
           ))}
         </div>
       </div>
+
+      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">Summary of TOSIA Pro</h2>
+            <p className="mt-1 text-sm text-slate-500">Choose a request, review subject averages, then open a subject to see section-level mastery.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700"
+              onChange={(event) => setSchoolYear(event.target.value)}
+              placeholder="School year"
+              value={schoolYear}
+            />
+            <select
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700"
+              onChange={(event) => setTerm(event.target.value as AcademicTerm | "all")}
+              value={term}
+            >
+              <option value="all">All Terms</option>
+              {termOptions.map((item) => (
+                <option key={item} value={item}>{item}</option>
+              ))}
+            </select>
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-civic px-4 text-sm font-semibold text-white hover:bg-civic/90 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!selectedTosiaRequest}
+              onClick={printTosiaSummary}
+              type="button"
+            >
+              <Printer size={16} /> Print Summary
+            </button>
+            <button
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!selectedTosiaRequest}
+              onClick={printTosiaSubjectSummary}
+              type="button"
+            >
+              <Printer size={16} /> Print Per Subject
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+          <SummaryCard detail="matching requests" icon={FileCheck2} label="TOSIA Requests" value={tosiaSummary.requests} />
+          <SummaryCard detail="still open" icon={Hourglass} label="Active Requests" value={tosiaSummary.activeRequests} />
+          <SummaryCard detail="from loading records" icon={ClipboardList} label="Expected Classes" value={tosiaSummary.expectedClasses} />
+          <SummaryCard detail="with TOSIA records" icon={CheckCircle2} label="Submitted Classes" value={tosiaSummary.submittedClasses} />
+          <SummaryCard detail="unique submitters" icon={BadgeCheck} label="Teachers Submitted" value={tosiaSummary.teachersSubmitted} />
+          <SummaryCard detail="selected request" icon={BarChart3} label="Overall MPS" value={`${formatAverage(tosiaSummary.overallMps)}%`} />
+        </div>
+
+        {(tosiaActionMessage || tosiaActionError) && (
+          <div className={`mt-5 rounded-lg border px-4 py-3 text-sm font-semibold ${tosiaActionError ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>
+            {tosiaActionError || tosiaActionMessage}
+          </div>
+        )}
+
+        <div className="mt-5">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">TOSIA Pro Requests</h3>
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {filteredTosiaRequests.map((request) => {
+              const requestAssessments = tosiaAssessments.filter((assessment) => assessment.requestId === request.requestId);
+              const isSelected = selectedTosiaRequest?.requestId === request.requestId;
+              const requestMps = (() => {
+                const totalPossible = requestAssessments.reduce(
+                  (sum, assessment) => sum + Number(assessment.totalStudents || 0) * Number(assessment.totalItems || assessment.itemResponses.length || 0),
+                  0,
+                );
+                const totalCorrect = requestAssessments.reduce(
+                  (sum, assessment) => sum + assessment.itemResponses.reduce((itemSum, item) => itemSum + Number(item.correctResponses || 0), 0),
+                  0,
+                );
+                return totalPossible > 0 ? (totalCorrect / totalPossible) * 100 : 0;
+              })();
+
+              return (
+                <button
+                  className={`rounded-lg border p-4 text-left transition hover:border-civic hover:shadow-sm ${isSelected ? "border-civic bg-red-50/50 ring-2 ring-civic/15" : "border-slate-200 bg-white"}`}
+                  key={request.requestId}
+                  onClick={() => {
+                    setSelectedTosiaRequestId(request.requestId);
+                    setSelectedTosiaSubjectKey("");
+                  }}
+                  type="button"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-words text-sm font-semibold text-slate-950">{request.testName}</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">Due {formatDate(request.dueDate)}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${request.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                      {request.status === "active" ? "Active" : "Closed"}
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                    <span><strong className="text-slate-950">{requestAssessments.length}</strong> submissions</span>
+                    <span><strong className="text-slate-950">{formatAverage(requestMps)}%</strong> MPS</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {filteredTosiaRequests.length === 0 && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">No TOSIA Pro requests found for the selected school year and term.</div>
+          )}
+        </div>
+
+        {selectedTosiaRequest && (
+          <div className="mt-6">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Subject Summary</h3>
+                <p className="mt-1 text-sm text-slate-500">{selectedTosiaRequest.testName} | {selectedTosiaRequest.term}, S.Y. {selectedTosiaRequest.schoolYear}</p>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {tosiaSubjectSummaryRows.map((subject) => {
+                const isSelected = selectedTosiaSubject?.subjectKey === subject.subjectKey;
+                return (
+                  <button
+                    className={`rounded-lg border p-4 text-left transition hover:border-civic hover:shadow-sm ${isSelected ? "border-civic bg-red-50/50 ring-2 ring-civic/15" : "border-slate-200 bg-white"}`}
+                    key={subject.subjectKey}
+                    onClick={() => setSelectedTosiaSubjectKey(subject.subjectKey)}
+                    type="button"
+                  >
+                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-950">{subject.subjectName}</p>
+                        <p className="mt-1 text-xs font-medium text-slate-500">{subject.gradeLevels} | {subject.sectionCount} section{subject.sectionCount === 1 ? "" : "s"}</p>
+                      </div>
+                      <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700">{formatAverage(subject.averageMps)}% MPS</span>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+                      <span><strong className="text-slate-950">{subject.totalStudents}</strong> students</span>
+                      <span><strong className="text-slate-950">{subject.mappedItems}/{subject.totalItems}</strong> mapped</span>
+                      <span><strong className="text-slate-950">{formatAverage(subject.mean)}</strong> mean</span>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+                      <p><span className="font-semibold text-slate-700">Least:</span> {subject.leastMastered}</p>
+                      <p><span className="font-semibold text-slate-700">Most:</span> {subject.mostMastered}</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {tosiaSubjectSummaryRows.length === 0 && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">No subject summaries are available for this request yet.</div>
+            )}
+          </div>
+        )}
+
+        {selectedTosiaSubject && (
+          <div className="mt-6 overflow-x-auto rounded-lg border border-slate-200">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <h3 className="text-sm font-semibold text-slate-950">{selectedTosiaSubject.subjectName} Section Details</h3>
+              <p className="mt-1 text-xs text-slate-500">Each row is one submitted section for the selected subject.</p>
+            </div>
+            <table className="w-full min-w-[1120px] text-left text-sm">
+              <thead className="bg-white text-slate-600">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Teacher</th>
+                  <th className="px-4 py-3 font-semibold">Section</th>
+                  <th className="px-4 py-3 font-semibold">Grade / Strand</th>
+                  <th className="px-4 py-3 font-semibold">Students</th>
+                  <th className="px-4 py-3 font-semibold">Items</th>
+                  <th className="px-4 py-3 font-semibold">Mapped</th>
+                  <th className="px-4 py-3 font-semibold">Mean</th>
+                  <th className="px-4 py-3 font-semibold">SD</th>
+                  <th className="px-4 py-3 font-semibold">MPS</th>
+                  <th className="px-4 py-3 font-semibold">VI</th>
+                  <th className="px-4 py-3 font-semibold">Least Mastered</th>
+                  <th className="px-4 py-3 font-semibold">Most Mastered</th>
+                  {isSuperAdmin && <th className="px-4 py-3 text-right font-semibold">Action</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {selectedTosiaSubjectAssessments.map((assessment) => {
+                  const assessmentSummary = summarizeTosiaAssessment(assessment);
+                  const interpretation = mpsInterpretation(assessmentSummary.mps);
+                  const isDeleting = deletingTosiaAssessmentId === assessment.assessmentId;
+
+                  return (
+                    <tr key={assessment.assessmentId}>
+                      <td className="px-4 py-3 font-medium text-slate-950">{assessment.teacherName}</td>
+                      <td className="px-4 py-3">{assessment.sectionName}</td>
+                      <td className="px-4 py-3">{`${assessment.gradeLevel} ${assessment.strand}`.trim()}</td>
+                      <td className="px-4 py-3">{assessment.totalStudents}</td>
+                      <td className="px-4 py-3">{assessment.totalItems}</td>
+                      <td className="px-4 py-3">{assessmentSummary.mappedItems}/{assessment.totalItems}</td>
+                      <td className="px-4 py-3">{formatAverage(assessmentSummary.mean)}</td>
+                      <td className="px-4 py-3">{formatAverage(assessmentSummary.sd)}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-950">{formatAverage(assessmentSummary.mps)}%</td>
+                      <td className="px-4 py-3">{interpretation.label} ({interpretation.code})</td>
+                      <td className="px-4 py-3">{assessmentSummary.lmc}</td>
+                      <td className="px-4 py-3">{assessmentSummary.mmc}</td>
+                      {isSuperAdmin && (
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={Boolean(deletingTosiaAssessmentId)}
+                            onClick={() => void deleteSubmittedTosiaAssessment(assessment)}
+                            type="button"
+                          >
+                            <Trash2 size={14} /> {isDeleting ? "Deleting..." : "Delete"}
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        </div>
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">

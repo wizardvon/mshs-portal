@@ -379,24 +379,17 @@ export function PersonnelLocatorPage() {
         title="Personnel Locator"
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard detail="teaching and non-teaching" icon={UserRoundCheck} label="Personnel" value={summary.total} />
-        <SummaryCard detail="self-reported locations" icon={MapPin} label="Located" value={summary.selfReported} />
-        <SummaryCard detail="today" icon={Umbrella} label="On Leave" value={summary.onLeave} />
-        <SummaryCard detail="today" icon={BriefcaseBusiness} label="Official Business" value={summary.officialBusiness} />
-      </div>
-
       {(message || error) && (
         <p className={`mt-5 rounded-md px-3 py-2 text-sm ${error ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>
           {error || message}
         </p>
       )}
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_420px]">
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="grid gap-3 md:grid-cols-[minmax(260px,360px)_1fr]">
+      <div className="mt-5 grid min-w-0 gap-5">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+          <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,360px)_1fr]">
             <select
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm"
+              className="h-10 w-full min-w-0 rounded-md border border-slate-300 bg-white px-3 text-sm"
               onChange={(event) => setSelectedStaffId(event.target.value)}
               value={selectedStaff?.staffId ?? ""}
             >
@@ -417,41 +410,75 @@ export function PersonnelLocatorPage() {
             </label>
           </div>
 
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
-              <div>
+          <div className="mt-4 min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:p-4">
+            <div className="flex min-w-0 flex-col justify-between gap-3 md:flex-row md:items-start">
+              <div className="min-w-0">
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Selected Personnel</p>
-                <h2 className="mt-1 text-xl font-bold text-slate-950">{selectedStaff?.staffName ?? "No personnel"}</h2>
-                <p className="mt-1 text-sm text-slate-600">
+                <h2 className="mt-1 break-words text-xl font-bold text-slate-950">{selectedStaff?.staffName ?? "No personnel"}</h2>
+                <p className="mt-1 break-words text-sm text-slate-600">
                   {selectedStaff ? `${selectedStaff.roleOrPosition} - ${staffTypeLabels[selectedStaff.staffType]}` : "No personnel records found."}
                 </p>
               </div>
-              <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[selectedResult.tone]}`}>
+              <span className={`inline-flex w-fit max-w-full shrink-0 rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusStyles[selectedResult.tone]}`}>
                 {selectedResult.source}
               </span>
             </div>
-            <div className="mt-5 rounded-lg border border-slate-200 bg-white p-5">
-              <div className="flex items-start gap-3">
+            <div className="mt-5 min-w-0 rounded-lg border border-slate-200 bg-white p-3 sm:p-5">
+              <div className="flex min-w-0 items-start gap-3">
                 <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-red-50 text-civic ring-1 ring-red-100">
                   <LocateFixed size={20} />
                 </span>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-500">Current Location / Status</p>
-                  <p className="mt-1 text-2xl font-bold text-slate-950">{selectedResult.label}</p>
-                  <p className="mt-2 text-sm text-slate-600">{selectedResult.detail}</p>
+                  <p className="mt-1 break-words text-xl font-bold text-slate-950 sm:text-2xl">{selectedResult.label}</p>
+                  <p className="mt-2 break-words text-sm text-slate-600">{selectedResult.detail}</p>
                 </div>
               </div>
             </div>
           </div>
 
           <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
-            <table className="w-full min-w-[760px] text-left text-sm">
+            <div className="divide-y divide-slate-100 md:hidden">
+              {visibleRows.map((row) => {
+                const result = resolveLocatorResult(
+                  row,
+                  attendanceByStaffId.get(row.staffId),
+                  locationsByStaffId.get(row.staffId),
+                  getCurrentScheduleEntry(row.staffId, scheduleEntries),
+                  subjectsById,
+                  sectionsById,
+                );
+
+                return (
+                  <button
+                    className="block w-full min-w-0 bg-white p-3 text-left hover:bg-slate-50"
+                    key={row.staffId}
+                    onClick={() => setSelectedStaffId(row.staffId)}
+                    type="button"
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="break-words font-medium text-slate-950">{row.staffName}</p>
+                        <p className="mt-1 break-words text-xs text-slate-500">{row.roleOrPosition}</p>
+                      </div>
+                      <span className="shrink-0 text-xs font-semibold text-slate-500">{staffTypeLabels[row.staffType]}</span>
+                    </div>
+                    <p className="mt-3 break-words text-sm font-semibold text-slate-950">{result.label}</p>
+                    <p className="mt-1 break-words text-xs text-slate-500">{result.detail}</p>
+                    <span className={`mt-3 inline-flex max-w-full rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${statusStyles[result.tone]}`}>
+                      {result.source}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <table className="hidden w-full table-fixed text-left text-sm md:table">
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">Personnel</th>
-                  <th className="px-4 py-3 font-semibold">Type</th>
-                  <th className="px-4 py-3 font-semibold">Location / Status</th>
-                  <th className="px-4 py-3 font-semibold">Source</th>
+                  <th className="w-[28%] px-4 py-3 font-semibold">Personnel</th>
+                  <th className="w-[16%] px-4 py-3 font-semibold">Type</th>
+                  <th className="w-[38%] px-4 py-3 font-semibold">Location / Status</th>
+                  <th className="w-[18%] px-4 py-3 font-semibold">Source</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -472,16 +499,16 @@ export function PersonnelLocatorPage() {
                       onClick={() => setSelectedStaffId(row.staffId)}
                     >
                       <td className="px-4 py-3">
-                        <p className="font-medium text-slate-950">{row.staffName}</p>
-                        <p className="mt-1 text-xs text-slate-500">{row.roleOrPosition}</p>
+                        <p className="break-words font-medium text-slate-950">{row.staffName}</p>
+                        <p className="mt-1 break-words text-xs text-slate-500">{row.roleOrPosition}</p>
                       </td>
-                      <td className="px-4 py-3">{staffTypeLabels[row.staffType]}</td>
+                      <td className="break-words px-4 py-3">{staffTypeLabels[row.staffType]}</td>
                       <td className="px-4 py-3">
-                        <p className="font-semibold text-slate-950">{result.label}</p>
-                        <p className="mt-1 text-xs text-slate-500">{result.detail}</p>
+                        <p className="break-words font-semibold text-slate-950">{result.label}</p>
+                        <p className="mt-1 break-words text-xs text-slate-500">{result.detail}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${statusStyles[result.tone]}`}>
+                        <span className={`inline-flex max-w-full break-words rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${statusStyles[result.tone]}`}>
                           {result.source}
                         </span>
                       </td>
@@ -496,14 +523,14 @@ export function PersonnelLocatorPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-start gap-3">
+        <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+          <div className="flex min-w-0 items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-red-50 text-civic ring-1 ring-red-100">
               <MapPin size={18} />
             </span>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-sm font-semibold text-slate-950">Set My Current Location</h2>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 break-words text-xs text-slate-500">
                 {ownStaff ? `${ownStaff.staffName} - ${ownStaff.roleOrPosition}` : "Your account is not linked to a personnel record."}
               </p>
             </div>
@@ -553,12 +580,19 @@ export function PersonnelLocatorPage() {
           <div className="mt-5 rounded-md border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
             <div className="flex items-start gap-2">
               <CalendarClock className="mt-0.5 shrink-0" size={16} />
-              <p>
+              <p className="min-w-0 break-words">
                 Schedule lookup uses {settings.currentSchoolYear}, {settings.currentTerm}; attendance and self-reported leave/OB override the schedule.
               </p>
             </div>
           </div>
         </section>
+      </div>
+
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard detail="teaching and non-teaching" icon={UserRoundCheck} label="Personnel" value={summary.total} />
+        <SummaryCard detail="self-reported locations" icon={MapPin} label="Located" value={summary.selfReported} />
+        <SummaryCard detail="today" icon={Umbrella} label="On Leave" value={summary.onLeave} />
+        <SummaryCard detail="today" icon={BriefcaseBusiness} label="Official Business" value={summary.officialBusiness} />
       </div>
     </section>
   );

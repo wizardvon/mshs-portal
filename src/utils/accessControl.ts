@@ -25,6 +25,7 @@ export const appModules: Array<{ id: AppModule; label: string }> = [
   { id: "scheduler", label: "Scheduler" },
   { id: "dll_submissions", label: "DLL Submissions" },
   { id: "document_requests", label: "Document Requests" },
+  { id: "tosia_pro", label: "TOSIA Pro" },
   { id: "mps", label: "MPS" },
   { id: "grade_submissions", label: "Grade Submission" },
   { id: "grade_summary", label: "Summary of Grades" },
@@ -58,6 +59,7 @@ export const defaultModulePermissionsByRole: Record<UserRole, AppModule[]> = {
     "scheduler",
     "dll_submissions",
     "document_requests",
+    "tosia_pro",
     "mps",
     "grade_submissions",
     "grade_summary",
@@ -72,9 +74,9 @@ export const defaultModulePermissionsByRole: Record<UserRole, AppModule[]> = {
     "settings",
     "backup_restore",
   ],
-  principal: ["dashboard", "loading", "scheduler", "dll_submissions", "document_requests", "mps", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
-  master_teacher: ["dashboard", "loading", "teachers", "subjects", "sections", "dll_submissions", "document_requests", "mps", "grade_submissions", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
-  teacher: ["dashboard", "loading", "dll_submissions", "document_requests", "mps", "grade_submissions", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
+  principal: ["dashboard", "loading", "scheduler", "dll_submissions", "document_requests", "tosia_pro", "mps", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
+  master_teacher: ["dashboard", "loading", "teachers", "subjects", "sections", "dll_submissions", "document_requests", "tosia_pro", "mps", "grade_submissions", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
+  teacher: ["dashboard", "loading", "dll_submissions", "document_requests", "tosia_pro", "mps", "grade_submissions", "grade_summary", "observations", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "personnel_settings"],
   registrar: ["dashboard", "sections", "enrollment", "personnel_locator", "printable_certificates", "reports", "personnel_settings"],
   administrative_officer: ["dashboard", "teachers", "document_requests", "personnel_attendance", "personnel_locator", "my_personnel_attendance", "teacher_loads", "printable_certificates", "reports", "backup_restore", "personnel_settings"],
   administrative_assistant: ["dashboard", "document_requests", "personnel_attendance", "personnel_locator", "my_personnel_attendance", "printable_certificates", "reports", "personnel_settings"],
@@ -88,6 +90,14 @@ export function getDefaultModulePermissions(role: UserRole) {
   return defaultModulePermissionsByRole[role] ?? ["dashboard"];
 }
 
+export function getRequiredModulePermissions(role: UserRole): AppModule[] {
+  const basePermissions: AppModule[] = ["dashboard", "personnel_locator", "personnel_settings"];
+  const teacherPermissions: AppModule[] =
+    role === "teacher" || role === "master_teacher" ? ["tosia_pro"] : [];
+
+  return Array.from(new Set([...basePermissions, ...teacherPermissions]));
+}
+
 export function getUserModulePermissions(
   profile?: Pick<UserProfile, "role" | "modulePermissions"> | null,
 ): AppModule[] {
@@ -96,8 +106,7 @@ export function getUserModulePermissions(
   const permissions = profile.modulePermissions?.length
     ? profile.modulePermissions
     : getDefaultModulePermissions(profile.role);
-  const requiredBasePermissions: AppModule[] = ["dashboard", "personnel_locator", "personnel_settings"];
-  const mergedPermissions = Array.from(new Set([...requiredBasePermissions, ...permissions]));
+  const mergedPermissions = Array.from(new Set([...getRequiredModulePermissions(profile.role), ...permissions]));
 
   return mergedPermissions;
 }

@@ -23,11 +23,13 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { logout } from "../services/authService";
+import { defaultUserPortalSettings, subscribeUserPortalSettings, type UserPortalSettings } from "../services/userSettingsService";
 import { useAuth } from "../providers/AuthProvider";
 import { canAccessModule, getRoleLabel } from "../utils/accessControl";
+import { NotificationCenter } from "./NotificationCenter";
 import { SidebarLink } from "./layout/SidebarLink";
 
 function SidebarSectionLabel({ children }: { children: string }) {
@@ -42,6 +44,7 @@ export function AppShell() {
   const { profile } = useAuth();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [portalSettings, setPortalSettings] = useState<UserPortalSettings>(defaultUserPortalSettings);
   const closeSidebar = () => setSidebarOpen(false);
   const canSee = (moduleId: Parameters<typeof canAccessModule>[1]) =>
     canAccessModule(profile, moduleId);
@@ -52,6 +55,7 @@ export function AppShell() {
     canSee("scheduler") ||
     canSee("dll_submissions") ||
     canSee("document_requests") ||
+    canSee("tosia_pro") ||
     canSee("mps") ||
     canSee("grade_submissions") ||
     canSee("grade_summary");
@@ -69,13 +73,15 @@ export function AppShell() {
     canSee("settings") ||
     canSee("backup_restore");
 
+  useEffect(() => subscribeUserPortalSettings(profile?.userId, setPortalSettings), [profile?.userId]);
+
   async function handleLogout() {
     await logout();
     navigate("/login", { replace: true });
   }
 
   return (
-    <main className="min-h-screen bg-mist">
+    <main className={`min-h-screen bg-mist portal-theme-${portalSettings.theme} portal-density-${portalSettings.density}`}>
       <div className="flex min-h-screen">
         {sidebarOpen && (
           <button
@@ -88,7 +94,7 @@ export function AppShell() {
 
         <aside
           className={[
-            "fixed inset-y-0 left-0 z-40 w-72 bg-gradient-to-b from-[#3a0000] via-wine to-[#160000] px-4 py-5 shadow-2xl shadow-red-950/35 transition-transform duration-200",
+            "fixed inset-y-0 left-0 z-40 flex w-72 flex-col bg-gradient-to-b from-[#3a0000] via-wine to-[#160000] px-4 py-5 shadow-2xl shadow-red-950/35 transition-transform duration-200",
             sidebarOpen ? "translate-x-0" : "-translate-x-full",
           ].join(" ")}
         >
@@ -118,7 +124,7 @@ export function AppShell() {
               <X size={18} />
             </button>
           </div>
-          <nav className="max-h-[calc(100vh-7.75rem)] space-y-1 overflow-y-auto pb-4 pr-1">
+          <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto pb-4 pr-1">
             <SidebarSectionLabel>Main</SidebarSectionLabel>
             {canSee("dashboard") && <SidebarLink icon={LayoutDashboard} label="Dashboard" onClick={closeSidebar} to="/dashboard" />}
             {canSee("personnel_settings") && <SidebarLink icon={Settings} label="Settings" onClick={closeSidebar} to="/personnel-settings" />}
@@ -133,6 +139,7 @@ export function AppShell() {
             {canSee("scheduler") && <SidebarLink icon={CalendarDays} label="Scheduler" onClick={closeSidebar} to="/scheduler" />}
             {canSee("dll_submissions") && <SidebarLink icon={FileCheck2} label="DLL Submissions" onClick={closeSidebar} to="/dll-submissions" />}
             {canSee("document_requests") && <SidebarLink icon={FileText} label="Document Requests" onClick={closeSidebar} to="/document-requests" />}
+            {canSee("tosia_pro") && <SidebarLink icon={ClipboardList} label="TOSIA Pro" onClick={closeSidebar} to="/tosia-pro" />}
             {canSee("mps") && <SidebarLink icon={BarChart3} label="MPS" onClick={closeSidebar} to="/mps" />}
             {canSee("grade_submissions") && <SidebarLink icon={FilePenLine} label="Grade Submission" onClick={closeSidebar} to="/grade-submissions" />}
             {canSee("grade_summary") && <SidebarLink icon={ClipboardList} label="Summary of Grades" onClick={closeSidebar} to="/grade-summary" />}
@@ -150,6 +157,15 @@ export function AppShell() {
             {canSee("settings") && <SidebarLink icon={Settings} label="Admin Setting" onClick={closeSidebar} to="/settings" />}
             {canSee("backup_restore") && <SidebarLink icon={Archive} label="Backup & Restore" onClick={closeSidebar} to="/backup-restore" />}
           </nav>
+          <div className="border-t border-white/10 pt-4">
+            <button
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white"
+              onClick={handleLogout}
+              type="button"
+            >
+              <LogOut size={18} /> Logout
+            </button>
+          </div>
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
@@ -173,13 +189,9 @@ export function AppShell() {
                 <p className="text-xs text-slate-500">MSHS Portal / {profile ? getRoleLabel(profile.role) : ""}</p>
               </div>
             </div>
-            <button
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-semibold text-civic shadow-sm transition hover:bg-red-50"
-              onClick={handleLogout}
-              type="button"
-            >
-              <LogOut size={16} /> Logout
-            </button>
+            <div className="flex items-center gap-2">
+              <NotificationCenter />
+            </div>
           </header>
           <div className="flex-1 bg-mist px-5 py-6">
             <Outlet />

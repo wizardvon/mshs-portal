@@ -21,6 +21,8 @@ export type DocumentRequestStatus = "active" | "closed";
 export type DocumentRequestType = "soft_copy" | "hard_copy" | "both";
 export type DocumentRequestSubmissionStatus = "submitted" | "confirmed" | "returned";
 export type MpsRequestStatus = "active" | "closed";
+export type TosiaRequestStatus = "active" | "closed";
+export type TosiaSkillLevel = "remembering" | "understanding" | "thinking";
 export type ObservationActivityType = "classroom_observation" | "coaching_mentoring";
 export type ClassroomObservationType = "Formal (CO)" | "Informal (ICO)" | "Walkthrough" | "Other";
 export type ObservationStatus = "scheduled" | "done" | "cancelled";
@@ -429,6 +431,69 @@ export type MpsSubmission = {
   plannedIntervention: string;
   submittedBy: string;
   submittedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type TosiaCompetency = {
+  competencyId: string;
+  order: number;
+  content: string;
+  hours: number;
+  plannedItems: number;
+};
+
+export type TosiaItemResponse = {
+  itemNumber: number;
+  competencyId: string;
+  skillLevel: TosiaSkillLevel;
+  correctResponses: number;
+};
+
+export type TosiaRequest = {
+  requestId: string;
+  title: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  testName: string;
+  dueDate: string;
+  instructions?: string;
+  status: TosiaRequestStatus;
+  createdBy: string;
+  creatorName: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type TosiaAssessment = {
+  assessmentId: string;
+  requestId: string;
+  title: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  quarter: string;
+  subjectId?: string;
+  subjectName: string;
+  sectionId?: string;
+  sectionName: string;
+  gradeLevel: string;
+  strand: string;
+  teacherId: string;
+  teacherName: string;
+  preparedBy: string;
+  preparedByPosition: string;
+  checkedBy: string;
+  checkedByPosition: string;
+  notedBy: string;
+  notedByPosition: string;
+  examDate: string;
+  analysisDate: string;
+  totalStudents: number;
+  totalItems: number;
+  competencies: TosiaCompetency[];
+  itemResponses: TosiaItemResponse[];
+  createdBy: string;
+  updatedBy?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };

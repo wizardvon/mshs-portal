@@ -20,6 +20,7 @@ export type AppModule =
   | "scheduler"
   | "dll_submissions"
   | "document_requests"
+  | "tosia_pro"
   | "mps"
   | "grade_submissions"
   | "grade_summary"

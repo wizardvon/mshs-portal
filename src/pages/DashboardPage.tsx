@@ -96,6 +96,7 @@ const quickActions: QuickAction[] = [
   { label: "Personnel Locator", detail: "find current staff locations", icon: MapPin, module: "personnel_locator", to: "/personnel-locator" },
   { label: "DLL Submissions", detail: "submit or review DLL records", icon: FileCheck2, module: "dll_submissions", to: "/dll-submissions" },
   { label: "Document Requests", detail: "submit or confirm requested documents", icon: FileText, module: "document_requests", to: "/document-requests" },
+  { label: "TOSIA Pro", detail: "prepare TOS and item analysis", icon: ClipboardList, module: "tosia_pro", to: "/tosia-pro" },
   { label: "Observation & Coaching", detail: "view and schedule observations", icon: Eye, module: "observations", to: "/observations" },
   { label: "Teacher Loads", detail: "view assigned teaching loads", icon: ClipboardList, module: "teacher_loads", to: "/teacher-loads" },
   { label: "SHS Loading", detail: "manage loading records", icon: Layers3, module: "loading", to: "/loading" },
@@ -355,13 +356,29 @@ export function DashboardPage() {
     );
   }, [ownScheduleEntries]);
 
+  const currentScheduleEntry = useMemo(() => {
+    if (ownScheduleEntries.length === 0) return undefined;
+
+    const current = getCurrentSchedulePosition();
+    return ownScheduleEntries.find(
+      (entry) =>
+        entry.day === current.day &&
+        timeToMinutes(entry.startTime) <= current.minutes &&
+        timeToMinutes(entry.endTime) > current.minutes,
+    );
+  }, [ownScheduleEntries]);
+
+  const currentScheduleSubjectLabel = currentScheduleEntry
+    ? currentScheduleEntry.customTitle || subjectsById.get(currentScheduleEntry.subjectId)?.subjectName || "Scheduled Activity"
+    : "No current subject";
+
   const nextScheduleSubjectLabel = nextScheduleEntry
     ? nextScheduleEntry.customTitle || subjectsById.get(nextScheduleEntry.subjectId)?.subjectName || "Scheduled Activity"
     : "No schedule";
 
   const nextScheduleDetail = nextScheduleEntry
-    ? `${nextScheduleEntry.day}, ${formatTimeRange(nextScheduleEntry)}`
-    : "tap to view weekly schedule";
+    ? `Next Subject: ${nextScheduleSubjectLabel} - ${nextScheduleEntry.day}, ${formatTimeRange(nextScheduleEntry)}`
+    : "Next Subject: No schedule";
 
   const attendanceSummary = useMemo(
     () => ({
@@ -787,7 +804,7 @@ export function DashboardPage() {
         progress: overallCompliance,
         onClick: () => document.getElementById("dashboard-needs-attention")?.scrollIntoView({ behavior: "smooth", block: "start" }),
       });
-      cards.push({ label: "Next Subject", value: nextScheduleSubjectLabel, detail: nextScheduleDetail, icon: CalendarClock, isActive: ownScheduleEntries.length > 0, onClick: () => setScheduleOpen(true) });
+      cards.push({ label: "Current Subject", value: currentScheduleSubjectLabel, detail: nextScheduleDetail, icon: CalendarClock, isActive: ownScheduleEntries.length > 0, onClick: () => setScheduleOpen(true) });
       if (canSeeObservationSummary) {
         cards.push({ label: "My Observation", value: observationSummary.scheduled, detail: `${observationSummary.today} today`, icon: Eye, isActive: observationSummary.scheduled > 0 || observationSummary.today > 0, to: "/observations" });
       }
@@ -875,6 +892,7 @@ export function DashboardPage() {
     attendanceSummary,
     canSeeDllSummary,
     canSeeUserSummary,
+    currentScheduleSubjectLabel,
     documentSummary,
     dllSummary,
     mpsSummary,

@@ -41,10 +41,18 @@ service cloud.firestore {
         && currentProfile().data.role in ["super_admin", "principal", "master_teacher"];
     }
 
+    function isTosiaReviewer() {
+      return isApprovedUser()
+        && currentProfile().data.role in ["super_admin", "admin", "principal", "master_teacher"];
+    }
+
     function canSubmitForTeacher(teacherId) {
       return isApprovedUser()
         && currentProfile().data.role in ["teacher", "master_teacher"]
-        && currentProfile().data.assignedTeacherId == teacherId;
+        && (
+          currentProfile().data.assignedTeacherId == teacherId
+          || request.auth.uid == teacherId
+        );
     }
 
     function canSubmitGradeForAssignment(data) {
@@ -228,6 +236,85 @@ service cloud.firestore {
         || request.resource.data[fieldName] is timestamp;
     }
 
+    function validNotificationToken(userId, tokenId) {
+      return request.resource.data.tokenId == tokenId
+        && request.resource.data.userId == userId
+        && request.resource.data.token is string
+        && request.resource.data.token.size() >= 20
+        && request.resource.data.userAgent is string
+        && request.resource.data.platform is string
+        && request.resource.data.enabled is bool
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "tokenId",
+          "token",
+          "userId",
+          "userAgent",
+          "platform",
+          "enabled",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validNotificationCreate(userId, notificationId) {
+      return request.resource.data.notificationId == notificationId
+        && request.resource.data.userId == userId
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.body is string
+        && request.resource.data.body.size() > 0
+        && request.resource.data.body.size() <= 600
+        && validOptionalString("href")
+        && request.resource.data.audience in [
+          "all",
+          "principal",
+          "master_teacher",
+          "teacher",
+          "registrar",
+          "administrative_officer",
+          "administrative_assistant",
+          "admin",
+          "super_admin",
+          "user"
+        ]
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.creatorName is string
+        && request.resource.data.read == false
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "notificationId",
+          "userId",
+          "title",
+          "body",
+          "href",
+          "audience",
+          "createdBy",
+          "creatorName",
+          "read",
+          "createdAt"
+        ]);
+    }
+
+    function validNotificationReadUpdate(userId, notificationId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.auth.uid == userId
+        && request.resource.data.notificationId == notificationId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.title == resource.data.title
+        && request.resource.data.body == resource.data.body
+        && request.resource.data.get("href", "") == resource.data.get("href", "")
+        && request.resource.data.audience == resource.data.audience
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.creatorName == resource.data.creatorName
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.read == true
+        && request.resource.data.readAt == request.time
+        && changedKeys.hasOnly(["read", "readAt"]);
+    }
+
     function validUserRole(role) {
       return role in [
         "principal",
@@ -243,7 +330,7 @@ service cloud.firestore {
 
     function validModulePermissions() {
       return request.resource.data.modulePermissions is list
-        && request.resource.data.modulePermissions.size() <= 26
+        && request.resource.data.modulePermissions.size() <= 27
         && request.resource.data.modulePermissions.hasOnly([
           "dashboard",
           "loading",
@@ -256,6 +343,7 @@ service cloud.firestore {
           "scheduler",
           "dll_submissions",
           "document_requests",
+          "tosia_pro",
           "mps",
           "grade_submissions",
           "grade_summary",
@@ -509,6 +597,72 @@ service cloud.firestore {
           "status",
           "updatedAt"
         ]);
+    }
+
+    function validTosiaRequestCreate(requestId) {
+      return request.resource.data.requestId == requestId
+        && request.resource.data.title is string
+        && request.resource.data.schoolYear is string
+        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
+        && request.resource.data.testName is string
+        && request.resource.data.dueDate is string
+        && validOptionalString("instructions")
+        && request.resource.data.status in ["active", "closed"]
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.creatorName is string
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "requestId",
+          "title",
+          "schoolYear",
+          "term",
+          "testName",
+          "dueDate",
+          "instructions",
+          "status",
+          "createdBy",
+          "creatorName",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validTosiaRequestUpdate(requestId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.requestId == requestId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.creatorName == resource.data.creatorName
+        && request.resource.data.title is string
+        && request.resource.data.schoolYear is string
+        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
+        && request.resource.data.testName is string
+        && request.resource.data.dueDate is string
+        && validOptionalString("instructions")
+        && request.resource.data.status in ["active", "closed"]
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "title",
+          "schoolYear",
+          "term",
+          "testName",
+          "dueDate",
+          "instructions",
+          "status",
+          "updatedAt"
+        ]);
+    }
+
+    function hasActiveTosiaRequest(data) {
+      let requestId = data.get("requestId", "");
+      let requestPath = /databases/$(database)/documents/tosiaRequests/$(requestId);
+      return requestId is string
+        && requestId.size() > 0
+        && exists(requestPath)
+        && get(requestPath).data.status == "active"
+        && get(requestPath).data.schoolYear == data.schoolYear
+        && get(requestPath).data.term == data.term;
     }
 
     function validMpsSubmissionCreate(submissionId) {
@@ -1026,6 +1180,27 @@ service cloud.firestore {
       allow create: if validFirstUser(userId) || validBootstrapUser(userId) || validPendingUser(userId);
       allow update: if (isSuperAdmin() && validUserProfileWrite(userId)) || validBootstrapUser(userId);
       allow delete: if isSuperAdmin();
+
+      match /notificationTokens/{tokenId} {
+        allow read: if isApprovedUser()
+          && (request.auth.uid == userId || isApprovedAdmin());
+        allow create, update: if isApprovedUser()
+          && request.auth.uid == userId
+          && validNotificationToken(userId, tokenId);
+        allow delete: if isApprovedUser()
+          && (request.auth.uid == userId || isApprovedAdmin());
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isApprovedUser()
+          && (request.auth.uid == userId || isApprovedAdmin());
+        allow create: if isApprovedAdmin()
+          && validNotificationCreate(userId, notificationId);
+        allow update: if isApprovedUser()
+          && validNotificationReadUpdate(userId, notificationId);
+        allow delete: if isApprovedUser()
+          && (request.auth.uid == userId || isApprovedAdmin());
+      }
     }
 
     match /system/{docId} { 
@@ -1064,9 +1239,21 @@ service cloud.firestore {
       allow create, update: if isApprovedUser()
         && request.auth.uid == userId
         && request.resource.data.hideInactiveDashboardCards is bool
+        && request.resource.data.theme in [
+          "mshs_classic",
+          "academic_blue",
+          "dark_mode",
+          "high_contrast"
+        ]
+        && request.resource.data.density in [
+          "comfortable",
+          "compact"
+        ]
         && request.resource.data.updatedAt == request.time
         && request.resource.data.keys().hasOnly([
           "hideInactiveDashboardCards",
+          "theme",
+          "density",
           "updatedAt"
         ]);
       allow delete: if false;
@@ -1126,6 +1313,42 @@ service cloud.firestore {
         && validMpsSubmissionCreate(submissionId);
       allow update: if canSubmitForTeacher(resource.data.teacherId)
         && validMpsSubmissionTeacherUpdate(submissionId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /tosiaRequests/{requestId} {
+      allow read: if isApprovedUser();
+      allow create: if isTosiaReviewer() && validTosiaRequestCreate(requestId);
+      allow update: if isTosiaReviewer() && validTosiaRequestUpdate(requestId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /tosiaAssessments/{assessmentId} {
+      allow read: if isTosiaReviewer()
+        || (
+          canSubmitForTeacher(resource.data.teacherId)
+        ) || (
+          isApprovedUser()
+          && currentProfile().data.role in ["teacher", "master_teacher"]
+        );
+      allow create: if (
+          canSubmitForTeacher(request.resource.data.teacherId)
+          || isTosiaReviewer()
+        )
+        && hasActiveTosiaRequest(request.resource.data)
+        && request.resource.data.assessmentId == assessmentId
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if (
+          canSubmitForTeacher(resource.data.teacherId)
+          || isTosiaReviewer()
+        )
+        && request.resource.data.requestId == resource.data.requestId
+        && hasActiveTosiaRequest(request.resource.data)
+        && request.resource.data.assessmentId == assessmentId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
       allow delete: if isSuperAdmin();
     }
 
