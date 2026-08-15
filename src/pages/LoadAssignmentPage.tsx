@@ -394,6 +394,11 @@ export function LoadAssignmentPage() {
   }, [isOnline, isSaving, pendingChangeList.length, saveError, savePendingChanges]);
 
   function handleAssign(subject: Subject, section: Section, teacherId: string) {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setSaveError("Cannot save changes while offline. Reconnect and try again.");
+      return;
+    }
+
     const key = `${section.sectionId}:${subject.subjectId}`;
 
     setPendingChanges((currentChanges) => ({
@@ -636,7 +641,7 @@ export function LoadAssignmentPage() {
             )}
           </div>
         }
-        description="Assign teachers to subject-section cells. Changes are staged locally and saved when online."
+        description="Assign teachers to subject-section cells. Changes auto-save to the live system."
         title="Load Assignment"
       />
 
@@ -755,7 +760,7 @@ export function LoadAssignmentPage() {
               syncMessage ||
               (isOnline
                 ? `${pendingChangeList.length} change${pendingChangeList.length === 1 ? "" : "s"} ready to save.`
-                : `${pendingChangeList.length} change${pendingChangeList.length === 1 ? "" : "s"} waiting for internet connection.`)}
+                : "Cannot save changes while offline. Reconnect and try again.")}
           </div>
         )}
       </div>

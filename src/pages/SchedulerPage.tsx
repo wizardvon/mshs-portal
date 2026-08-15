@@ -114,17 +114,6 @@ type FeasibilityResult = {
     remainingHours: number;
   }>;
 };
-type LocalScheduleDraft = {
-  entries: ClassScheduleEntry[];
-  conflicts: Conflict[];
-  saveMessage: string;
-  generationMessage: string;
-  optimizationScore: number | null;
-  completionPercent: number | null;
-  generationProgress: GenerationProgress | null;
-  updatedAt: number;
-};
-
 const days: ScheduleDay[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const bestFitSearchMs = 60000;
 const bestFitMaxCombinations = 500000;
@@ -944,19 +933,6 @@ function cleanEntryForLocalDraft(entry: ClassScheduleEntry): ClassScheduleEntry 
   return draftEntry;
 }
 
-function loadLocalScheduleDraft(storageKey: string): LocalScheduleDraft | null {
-  try {
-    const rawDraft = window.localStorage.getItem(storageKey);
-    if (!rawDraft) return null;
-    const parsed = JSON.parse(rawDraft) as LocalScheduleDraft;
-    if (!Array.isArray(parsed.entries) || typeof parsed.updatedAt !== "number") return null;
-    return parsed;
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
-}
-
 function removeLocalScheduleDraft(storageKey: string) {
   try {
     window.localStorage.removeItem(storageKey);
@@ -972,9 +948,15 @@ function getEntryUpdatedAtMs(entry: ClassScheduleEntry) {
   return updatedAt.seconds ? updatedAt.seconds * 1000 : 0;
 }
 
-function getNewestCloudScheduleMs(entries: ClassScheduleEntry[]) {
-  return entries.reduce((newest, entry) => Math.max(newest, getEntryUpdatedAtMs(entry)), 0);
-}
+type LocalDraftStatusOptions = {
+  entries?: ClassScheduleEntry[];
+  nextConflicts?: Conflict[];
+  saveStatus?: string;
+  nextGenerationMessage?: string;
+  nextOptimizationScore?: number | null;
+  nextCompletionPercent?: number | null;
+  nextGenerationProgress?: GenerationProgress | null;
+};
 
 function getAvailableHoursForSlots(slots: Slot[]) {
   return slots.reduce((sum, slot) => sum + slot.duration, 0) * days.length;
@@ -1951,8 +1933,6 @@ export function SchedulerPage() {
   const [editingRoomScheduleId, setEditingRoomScheduleId] = useState<string | null>(null);
   const [roomDraft, setRoomDraft] = useState("");
   const [lockMessage, setLockMessage] = useState("");
-  const [pendingLocalDraft, setPendingLocalDraft] = useState<LocalScheduleDraft | null>(null);
-  const [cloudScheduleLoadedAt, setCloudScheduleLoadedAt] = useState(0);
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [autoPlotMode, setAutoPlotMode] = useState<AutoPlotMode>("empty");
   const [autoPlotScope, setAutoPlotScope] = useState<AutoPlotScope>("selected");
@@ -1969,7 +1949,8 @@ export function SchedulerPage() {
   const [resetConfirmation, setResetConfirmation] = useState("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const latestSaveRunRef = useRef(0);
-  const hasAutoRestoredDraftRef = useRef("");
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const draftRevisionRef = useRef(0);
   const stopGenerationRef = useRef(false);
   const scheduleContextKey = `${schoolYear}|${term}|${gradeLevel}|${strandFilter}`;
   const draftStorageKey = getDraftStorageKey(schoolYear, term, gradeLevel, strandFilter);
@@ -1996,14 +1977,13 @@ export function SchedulerPage() {
     () =>
       subscribeClassSchedulesByPeriod(schoolYear, term, gradeLevel, (entries) => {
         setSavedEntries(entries);
-        setCloudScheduleLoadedAt(Date.now());
       }),
     [gradeLevel, schoolYear, term],
   );
   useEffect(() => {
     scheduleContextKeyRef.current = scheduleContextKey;
     latestSaveRunRef.current += 1;
-    hasAutoRestoredDraftRef.current = "";
+    draftRevisionRef.current += 1;
     setDraftEntries([]);
     setHasDraftChanges(false);
     setConflicts([]);
@@ -2023,20 +2003,8 @@ export function SchedulerPage() {
     setSelectedTeacherId("");
     setShowResetConfirmation(false);
     setResetConfirmation("");
-    setPendingLocalDraft(loadLocalScheduleDraft(draftStorageKey));
+    removeLocalScheduleDraft(draftStorageKey);
   }, [draftStorageKey, gradeLevel, schoolYear, scheduleContextKey, strandFilter, term]);
-
-  useEffect(() => {
-    if (!cloudScheduleLoadedAt || !pendingLocalDraft) return;
-
-    const newestCloudScheduleMs = getNewestCloudScheduleMs(savedEntries);
-    if (
-      pendingLocalDraft.updatedAt > newestCloudScheduleMs &&
-      hasAutoRestoredDraftRef.current !== draftStorageKey
-    ) {
-      restoreLocalDraft(pendingLocalDraft, true);
-    }
-  }, [cloudScheduleLoadedAt, draftStorageKey, pendingLocalDraft, savedEntries]);
 
   const remainingGenerationSeconds = useMemo(() => {
     if (!generationEndsAt || !isGenerating) return null;
@@ -2536,75 +2504,36 @@ export function SchedulerPage() {
 
   function saveLocalDraft({
     entries = draftEntries,
-    nextConflicts = conflicts,
-    saveStatus = "Local draft saved",
-    nextGenerationMessage = generationMessage,
-    nextOptimizationScore = optimizationScore,
-    nextCompletionPercent = completionPercent,
-    nextGenerationProgress = generationProgress,
-  }: {
-    entries?: ClassScheduleEntry[];
-    nextConflicts?: Conflict[];
-    saveStatus?: string;
-    nextGenerationMessage?: string;
-    nextOptimizationScore?: number | null;
-    nextCompletionPercent?: number | null;
-    nextGenerationProgress?: GenerationProgress | null;
-  }) {
-    const draft: LocalScheduleDraft = {
-      entries: entries.map(cleanEntryForLocalDraft),
-      conflicts: nextConflicts,
-      saveMessage: saveStatus,
-      generationMessage: nextGenerationMessage,
-      optimizationScore: nextOptimizationScore,
-      completionPercent: nextCompletionPercent,
-      generationProgress: nextGenerationProgress,
-      updatedAt: Date.now(),
-    };
-
-    try {
-      window.localStorage.setItem(draftStorageKey, JSON.stringify(draft));
-      setPendingLocalDraft(draft);
+    saveStatus = "Auto-save queued.",
+  }: LocalDraftStatusOptions) {
+    if (entries.length > 0) {
       setSaveMessage(saveStatus);
-    } catch (error) {
-      console.error(error);
-      setSaveMessage("Local draft save failed");
     }
-  }
-
-  function restoreLocalDraft(draft: LocalScheduleDraft, recovered: boolean) {
-    hasAutoRestoredDraftRef.current = draftStorageKey;
-    setDraftEntries(draft.entries);
-    setHasDraftChanges(true);
-    setConflicts(draft.conflicts);
-    setGenerationMessage(draft.generationMessage);
-    setOptimizationScore(draft.optimizationScore);
-    setCompletionPercent(draft.completionPercent);
-    setGenerationProgress(draft.generationProgress);
-    setRecentlyChangedScheduleIds(new Set(draft.entries.map((entry) => entry.scheduleId)));
-    setPlacementLog(draft.entries.slice(-12).reverse());
-    setPendingLocalDraft(null);
-    setSaveMessage(recovered ? "Recovered local draft from previous session" : draft.saveMessage || "Local draft saved");
   }
 
   function updateDraftSchedule(
     entries: ClassScheduleEntry[],
-    draftOptions: Omit<Parameters<typeof saveLocalDraft>[0], "entries" | "saveStatus"> = {},
+    draftOptions: Omit<LocalDraftStatusOptions, "entries" | "saveStatus"> = {},
   ) {
     const entriesSnapshot = entries.map((entry) => ({ ...entry }));
+    draftRevisionRef.current += 1;
     setDraftEntries(entriesSnapshot);
     setHasDraftChanges(true);
     saveLocalDraft({
       entries: entriesSnapshot,
-      saveStatus: "Draft updated. Click Save to update the current schedule.",
+      saveStatus: "Auto-save queued.",
       ...draftOptions,
     });
   }
 
-  async function handleSaveCurrentSchedule() {
+  async function handleSaveCurrentSchedule(
+    entriesToSave = visibleEntries,
+    saveStatus = "Current schedule saved.",
+    draftRevision = draftRevisionRef.current,
+  ) {
     if (!canEdit || isGenerating || isSaving) return;
 
-    const entriesSnapshot = visibleEntries.map(cleanEntryForLocalDraft);
+    const entriesSnapshot = entriesToSave.map(cleanEntryForLocalDraft);
     if (entriesSnapshot.length === 0) {
       setSaveMessage("Load or plot a schedule before saving.");
       return;
@@ -2623,21 +2552,18 @@ export function SchedulerPage() {
 
         if (latestSaveRunRef.current === saveRun && scheduleContextKeyRef.current === contextKey) {
           setSavedEntries(entriesSnapshot);
-          setDraftEntries([]);
-          setHasDraftChanges(false);
-          removeLocalScheduleDraft(draftStorageKey);
-          setPendingLocalDraft(null);
-          setSaveMessage("Current schedule saved.");
+          if (draftRevisionRef.current === draftRevision) {
+            setDraftEntries([]);
+            setHasDraftChanges(false);
+            removeLocalScheduleDraft(draftStorageKey);
+          }
+          setSaveMessage(saveStatus);
         }
       })
       .catch((error) => {
         console.error(error);
         if (latestSaveRunRef.current === saveRun && scheduleContextKeyRef.current === contextKey) {
-          saveLocalDraft({
-            entries: entriesSnapshot,
-            saveStatus: "Cloud save failed, local draft preserved",
-          });
-          setSaveMessage("Cloud save failed, local draft preserved");
+          setSaveMessage("Auto-save failed. Check your connection and try again.");
         }
       })
       .finally(() => {
@@ -2647,6 +2573,29 @@ export function SchedulerPage() {
     saveQueueRef.current = saveJob;
     return saveJob;
   }
+
+  useEffect(() => {
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    if (!canEdit || isGenerating || isSaving || !hasDraftChanges || draftEntries.length === 0) return;
+
+    const entriesSnapshot = draftEntries.map((entry) => ({ ...entry }));
+    const draftRevision = draftRevisionRef.current;
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void handleSaveCurrentSchedule(entriesSnapshot, "Auto-saved current schedule.", draftRevision);
+    }, 1500);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [canEdit, draftEntries, hasDraftChanges, isGenerating, isSaving]);
 
   function handleClearDraft() {
     setDraftEntries([]);
@@ -2661,7 +2610,6 @@ export function SchedulerPage() {
     setRecentlyChangedScheduleIds(new Set());
     setPlacementLog([]);
     setGenerationEndsAt(null);
-    setPendingLocalDraft(null);
     removeLocalScheduleDraft(draftStorageKey);
   }
 
@@ -2744,7 +2692,6 @@ export function SchedulerPage() {
       setRecentlyChangedScheduleIds(new Set());
       setPlacementLog([]);
       setGenerationEndsAt(null);
-      setPendingLocalDraft(null);
       setShowResetConfirmation(false);
       setResetConfirmation("");
       removeLocalScheduleDraft(draftStorageKey);
@@ -3984,7 +3931,7 @@ export function SchedulerPage() {
                   onClick={() => void handleSaveCurrentSchedule()}
                   type="button"
                 >
-                  <Save size={16} /> Save
+                  <Save size={16} /> Save Now
                 </button>
                 <button
                   className="inline-flex h-10 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
@@ -4008,16 +3955,6 @@ export function SchedulerPage() {
                 </button>
               </>
             )}
-            {pendingLocalDraft && (
-              <button
-                className="inline-flex h-10 items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:bg-slate-100"
-                disabled={isGenerating}
-                onClick={() => restoreLocalDraft(pendingLocalDraft, false)}
-                type="button"
-              >
-                Restore Local Draft
-              </button>
-            )}
             <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={openPrintableSchedule} type="button">
               <Printer size={16} /> Print
             </button>
@@ -4026,13 +3963,13 @@ export function SchedulerPage() {
             </button>
           </div>
         }
-        description="Review, manage, and save class schedules from existing load assignments."
+        description="Review, manage, and auto-save class schedules from existing load assignments."
         title="Scheduler"
       />
 
       <div className="mb-3 grid gap-2 sm:grid-cols-4">
         <SummaryCard detail={gradeLevel === "all" ? "All grades selected" : `Grade ${gradeLevel} selected`} label="Sections" value={visibleSections.length} />
-        <SummaryCard detail={hasDraftChanges ? "draft active" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
+        <SummaryCard detail={hasDraftChanges ? "auto-save pending" : "saved schedule"} label="Scheduled Sessions" value={visibleEntries.length} />
         <SummaryCard detail="needs review" label="Conflicts" value={actionableConflicts.length} />
         <SummaryCard detail={optimizationScore === null ? "audit to calculate" : `score ${optimizationScore.toLocaleString()}`} label="Done" value={completionPercent === null ? "-" : `${completionPercent}%`} />
       </div>

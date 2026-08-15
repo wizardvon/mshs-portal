@@ -29,6 +29,11 @@ export type ObservationStatus = "scheduled" | "done" | "cancelled";
 export type PersonnelStaffType = "teaching" | "non_teaching";
 export type PersonnelAttendanceStatus = "present" | "absent" | "official_business";
 export type PersonnelLocatorStatus = "available" | "on_leave" | "official_business";
+export type PersonnelCreditType =
+  | "specialOrderServiceCredit"
+  | "localServiceCredit"
+  | "wellnessBreak"
+  | "leaveCredits";
 export type EnrollmentStatus = "enrolled" | "transferred" | "dropped";
 
 export type Teacher = {
@@ -331,6 +336,7 @@ export type PersonnelAttendanceRecord = {
   staffName: string;
   roleOrPosition: string;
   status: PersonnelAttendanceStatus;
+  absenceCreditType?: PersonnelCreditType;
   remarks: string;
   recordedBy: string;
   recorderName: string;
@@ -368,6 +374,27 @@ export type PersonnelCreditBalance = {
   updaterName: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
+};
+
+export type PersonnelCreditLogSource = "manual_adjustment" | "absence_deduction" | "absence_refund";
+
+export type PersonnelCreditLog = {
+  logId: string;
+  staffId: string;
+  staffName: string;
+  staffType: PersonnelStaffType;
+  roleOrPosition: string;
+  creditType: PersonnelCreditType;
+  source: PersonnelCreditLogSource;
+  amount: number;
+  previousBalance: number;
+  newBalance: number;
+  attendanceId?: string;
+  attendanceDate?: string;
+  remarks: string;
+  createdBy: string;
+  creatorName: string;
+  createdAt?: Timestamp;
 };
 
 export type ObservationSchedule = {
@@ -519,6 +546,86 @@ export type GradeSubmission = {
   grade: number;
   submittedBy: string;
   submittedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type GradeComputationWeights = {
+  written: number;
+  performance: number;
+  exam: number;
+};
+
+export type GradeComputationHighestScores = {
+  written: {
+    ww1: number;
+    ww2: number;
+    ww3: number;
+    ww4: number;
+    ww5: number;
+  };
+  performance: {
+    pt1: number;
+    pt2: number;
+    pt3: number;
+  };
+  exam: {
+    s1: number;
+    s2: number;
+    tt: number;
+  };
+};
+
+export type GradeComputationComponent = {
+  score: number;
+  maxScore: number;
+  percentageScore: number;
+  weightedScore: number;
+  itemScores?: Record<string, number>;
+};
+
+export type GradeComputation = {
+  computationId: string;
+  assignmentId: string;
+  classEnrollmentId: string;
+  enrollmentId: string;
+  lrn: string;
+  studentName: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  teacherId: string;
+  teacherName: string;
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
+  sectionId: string;
+  sectionName: string;
+  gradeLevel: string;
+  strand: string;
+  weights: GradeComputationWeights;
+  highestScores?: GradeComputationHighestScores;
+  written: GradeComputationComponent;
+  performance: GradeComputationComponent;
+  exam: GradeComputationComponent;
+  initialGrade: number;
+  finalGrade: number;
+  submittedBy: string;
+  submittedAt?: Timestamp;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+};
+
+export type GradeComputationSettings = {
+  settingsId: string;
+  assignmentId: string;
+  schoolYear: string;
+  term: AcademicTerm;
+  teacherId: string;
+  subjectId: string;
+  sectionId: string;
+  weights: GradeComputationWeights;
+  highestScores: GradeComputationHighestScores;
+  submittedBy: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 };

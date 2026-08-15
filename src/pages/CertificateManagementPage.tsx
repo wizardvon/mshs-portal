@@ -6,7 +6,6 @@ import { PageHeader } from "../components/common/PageHeader";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { subscribeCollection } from "../services/firestoreCrud";
 import {
-  certificateEventTypes,
   createCertificate,
   createCertificateParticipant,
   createCertificatePerson,
@@ -23,7 +22,6 @@ import {
 import { defaultAcademicSettings } from "../services/settingsService";
 import { subscribeTeachers } from "../services/teacherService";
 import type {
-  CertificateEventType,
   CertificateFormat,
   CertificateParticipant,
   CertificatePerson,
@@ -51,7 +49,7 @@ const deletePassword = "dxuxihnfwcls";
 
 const emptyCertificate: CertificateForm = {
   certificateNo: "",
-  eventType: "LAC Session",
+  eventType: "Certificate",
   eventTitle: "",
   startDate: "",
   endDate: "",
@@ -85,6 +83,12 @@ const emptyPerson: PersonForm = {
   roleOrPosition: "",
   office: "",
   notes: "",
+};
+
+const certificateFormatLabels: Record<CertificateFormat, string> = {
+  certification: "CERTIFICATION",
+  participation: "Certificate of Participation",
+  recognition: "Certificate of Recognition",
 };
 
 function getCertificateStart(certificate: Pick<CertificateRecord, "startDate" | "eventDate">) {
@@ -154,7 +158,6 @@ export function CertificateManagementPage() {
   const [participantOpen, setParticipantOpen] = useState(false);
   const [personOpen, setPersonOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [eventTypeFilter, setEventTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [copiedId, setCopiedId] = useState("");
   const [personnelSearch, setPersonnelSearch] = useState("");
@@ -199,7 +202,6 @@ export function CertificateManagementPage() {
     return certificates.filter((certificate) => {
       const matchesSearch = [
         certificate.certificateNo,
-        certificate.eventType,
         certificate.eventTitle,
         getDateRange(certificate),
         certificate.venue,
@@ -211,11 +213,10 @@ export function CertificateManagementPage() {
 
       return (
         matchesSearch &&
-        (eventTypeFilter === "all" || certificate.eventType === eventTypeFilter) &&
         (statusFilter === "all" || certificate.status === statusFilter)
       );
     });
-  }, [certificates, eventTypeFilter, search, statusFilter]);
+  }, [certificates, search, statusFilter]);
 
   const staffRows = useMemo<StaffRow[]>(() => {
     const teachingRows = teachers
@@ -329,10 +330,17 @@ export function CertificateManagementPage() {
 
   async function saveCertificate() {
     const isCertification = certificateForm.certificateFormat === "certification";
+    const isRecognition = certificateForm.certificateFormat === "recognition";
+    const recognitionDetails = certificateForm.notes?.trim() ?? "";
+    if (isRecognition && !recognitionDetails) {
+      window.alert("Enter the details or reason for the recognition.");
+      return;
+    }
     const certificationDate = certificateForm.issuedDate || certificateForm.startDate || new Date().toISOString().slice(0, 10);
     const nextForm = {
       ...certificateForm,
-      eventType: isCertification ? "Training" as CertificateEventType : certificateForm.eventType,
+      notes: isRecognition ? recognitionDetails : certificateForm.notes,
+      eventType: "Certificate",
       startDate: isCertification ? certificationDate : certificateForm.startDate,
       endDate: isCertification ? certificationDate : certificateForm.endDate || certificateForm.startDate,
       issuedDate: certificationDate,
@@ -341,7 +349,7 @@ export function CertificateManagementPage() {
         : certificateForm.issuedBy,
       status: certificateForm.status || "valid" as CertificateStatus,
       publicAccess: isCertification ? true : certificateForm.publicAccess,
-      defaultHoursAttended: Number(certificateForm.defaultHoursAttended || 0),
+      defaultHoursAttended: isRecognition ? 0 : Number(certificateForm.defaultHoursAttended || 0),
       certificationSignatoryName:
         isCertification
           ? certificateForm.certificationSignatoryName
@@ -364,12 +372,13 @@ export function CertificateManagementPage() {
 
   function startCreateParticipant() {
     if (!selectedCertificate) return;
+    const isRecognition = selectedCertificate.certificateFormat === "recognition";
     setEditingParticipant(null);
     resetPersonnelPicker();
     setParticipantForm({
       ...emptyParticipant,
       certificateNo: selectedCertificate.certificateNo,
-      hoursAttended: Number(selectedCertificate.defaultHoursAttended || 0),
+      hoursAttended: isRecognition ? 0 : Number(selectedCertificate.defaultHoursAttended || 0),
       status: selectedCertificate.status,
       publicAccess: selectedCertificate.publicAccess,
     });
@@ -564,10 +573,10 @@ export function CertificateManagementPage() {
         >
           <span className="block font-medium text-slate-900 hover:underline">{certificate.eventTitle}</span>
           <span className="mt-1 block text-xs text-slate-500">
-            {certificate.eventType} / {getDateRange(certificate)}
+            {getDateRange(certificate)}
           </span>
           <span className="mt-1 block text-xs font-semibold text-civic">
-            {(certificate.certificateFormat ?? "participation") === "certification" ? "CERTIFICATION" : "Certificate of Participation"}
+            {certificateFormatLabels[certificate.certificateFormat ?? "participation"]}
             {(certificate.certificateFormat ?? "participation") === "certification" && certificate.certificationType === "esat" ? " / ESAT" : ""}
           </span>
         </button>
@@ -618,7 +627,7 @@ export function CertificateManagementPage() {
 
   const participantColumns: DataColumn<CertificateParticipant>[] = [
     {
-      header: "Participant",
+      header: selectedCertificate?.certificateFormat === "recognition" ? "Recipient" : "Participant",
       render: (participant) => (
         <div>
           <p className="font-semibold text-slate-950">{participant.participantName}</p>
@@ -629,7 +638,9 @@ export function CertificateManagementPage() {
       ),
     },
     { header: "Certificate No.", render: (participant) => participant.certificateNo },
-    { header: "Hours", render: (participant) => `${Number(participant.hoursAttended || 0)} hours` },
+    ...(selectedCertificate?.certificateFormat === "recognition"
+      ? []
+      : [{ header: "Hours", render: (participant: CertificateParticipant) => `${Number(participant.hoursAttended || 0)} hours` }]),
     {
       header: "Status",
       render: (participant) => (
@@ -695,17 +706,13 @@ export function CertificateManagementPage() {
             <Plus size={16} /> Add Certificate
           </button>
         }
-        description="Create LAC, training, and seminar certificate activities. After creating one, add participants, speakers/facilitators, and technical working group members."
+        description="Create participation certificates, certifications, and recognition certificates. After creating one, add the people who will receive the same certificate."
         title="Certificates"
       />
 
       <div className="mb-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_180px_150px]">
+        <div className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_150px]">
           <input className="h-10 rounded-md border border-slate-300 px-3 text-sm" onChange={(event) => setSearch(event.target.value)} placeholder="Search certificate or activity" value={search} />
-          <select className="h-10 rounded-md border border-slate-300 px-3 text-sm" onChange={(event) => setEventTypeFilter(event.target.value)} value={eventTypeFilter}>
-            <option value="all">All activities</option>
-            {certificateEventTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-          </select>
           <select className="h-10 rounded-md border border-slate-300 px-3 text-sm" onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}>
             <option value="all">All statuses</option>
             <option value="valid">Valid</option>
@@ -735,10 +742,10 @@ export function CertificateManagementPage() {
             {selectedCertificate && (
               <>
                 <p className="mt-1 text-sm text-slate-600">
-                  {selectedCertificate.certificateNo} / {selectedCertificate.eventType} / {getDateRange(selectedCertificate)}
+                  {selectedCertificate.certificateNo} / {getDateRange(selectedCertificate)}
                 </p>
                 <p className="mt-1 text-sm font-semibold text-civic">
-                  {(selectedCertificate.certificateFormat ?? "participation") === "certification" ? "CERTIFICATION" : "Certificate of Participation"}
+                  {certificateFormatLabels[selectedCertificate.certificateFormat ?? "participation"]}
                   {(selectedCertificate.certificateFormat ?? "participation") === "certification" && selectedCertificate.certificationType === "esat" ? " / ESAT" : ""}
                   {selectedCertificate.certificationSignatoryName ? ` / ${selectedCertificate.certificationSignatoryName}` : ""}
                 </p>
@@ -751,12 +758,14 @@ export function CertificateManagementPage() {
           <div className="mt-5 space-y-6">
             <div>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-base font-bold text-slate-950">Participants</h3>
+                <h3 className="text-base font-bold text-slate-950">
+                  {selectedCertificate.certificateFormat === "recognition" ? "Recipients" : "Participants"}
+                </h3>
                 <button className="inline-flex h-9 items-center gap-2 rounded-md bg-civic px-3 text-sm font-semibold text-white hover:bg-wine" onClick={startCreateParticipant} type="button">
-                  <Plus size={16} /> Add Participant
+                  <Plus size={16} /> {selectedCertificate.certificateFormat === "recognition" ? "Add Recipient" : "Add Participant"}
                 </button>
               </div>
-              <DataTable columns={participantColumns} data={participants} emptyText="No participants added yet." getKey={(participant) => participant.participantId} />
+              <DataTable columns={participantColumns} data={participants} emptyText={selectedCertificate.certificateFormat === "recognition" ? "No recipients added yet." : "No participants added yet."} getKey={(participant) => participant.participantId} />
             </div>
 
             <div>
@@ -792,14 +801,14 @@ export function CertificateManagementPage() {
           <select className="h-11 rounded-md border border-slate-300 px-3 sm:col-span-2" onChange={(event) => setCertificateForm({ ...certificateForm, certificateFormat: event.target.value as CertificateFormat })} value={certificateForm.certificateFormat ?? "participation"}>
             <option value="participation">Certificate of Participation</option>
             <option value="certification">CERTIFICATION</option>
+            <option value="recognition">Certificate of Recognition</option>
           </select>
           {(certificateForm.certificateFormat ?? "participation") !== "certification" && (
             <>
-              <select className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setCertificateForm({ ...certificateForm, eventType: event.target.value as CertificateEventType })} value={certificateForm.eventType}>
-                {certificateEventTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-              </select>
-              <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setCertificateForm({ ...certificateForm, defaultHoursAttended: Number(event.target.value) })} placeholder="Default hours" step="0.5" type="number" value={certificateForm.defaultHoursAttended ?? 0} />
-              <input className="h-11 rounded-md border border-slate-300 px-3 sm:col-span-2" onChange={(event) => setCertificateForm({ ...certificateForm, eventTitle: event.target.value })} placeholder="Activity title" required value={certificateForm.eventTitle} />
+              {(certificateForm.certificateFormat ?? "participation") !== "recognition" && (
+                <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setCertificateForm({ ...certificateForm, defaultHoursAttended: Number(event.target.value) })} placeholder="Default hours" step="0.5" type="number" value={certificateForm.defaultHoursAttended ?? 0} />
+              )}
+              <input className="h-11 rounded-md border border-slate-300 px-3 sm:col-span-2" onChange={(event) => setCertificateForm({ ...certificateForm, eventTitle: event.target.value })} placeholder={(certificateForm.certificateFormat ?? "participation") === "recognition" ? "Title of Recognition" : "Activity title"} required value={certificateForm.eventTitle} />
               <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setCertificateForm({ ...certificateForm, startDate: event.target.value })} required type="date" value={certificateForm.startDate} />
               <input className="h-11 rounded-md border border-slate-300 px-3" min={certificateForm.startDate} onChange={(event) => setCertificateForm({ ...certificateForm, endDate: event.target.value })} required type="date" value={certificateForm.endDate} />
               <input className="h-11 rounded-md border border-slate-300 px-3 sm:col-span-2" onChange={(event) => setCertificateForm({ ...certificateForm, venue: event.target.value })} placeholder="Venue" required value={certificateForm.venue} />
@@ -819,7 +828,7 @@ export function CertificateManagementPage() {
               <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setCertificateForm({ ...certificateForm, venue: event.target.value })} placeholder="Venue" required value={certificateForm.venue} />
             </>
           )}
-          <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setCertificateForm({ ...certificateForm, certificationSignatoryName: event.target.value })} placeholder="Certification signatory name" required={(certificateForm.certificateFormat ?? "participation") === "certification"} value={certificateForm.certificationSignatoryName ?? ""} />
+          <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setCertificateForm({ ...certificateForm, certificationSignatoryName: event.target.value })} placeholder={(certificateForm.certificateFormat ?? "participation") === "certification" ? "Certification signatory name" : "Signatory name"} required={(certificateForm.certificateFormat ?? "participation") === "certification"} value={certificateForm.certificationSignatoryName ?? ""} />
           <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setCertificateForm({ ...certificateForm, certificationSignatoryTitle: event.target.value })} placeholder="Signatory position / title" value={certificateForm.certificationSignatoryTitle ?? ""} />
           {(certificateForm.certificateFormat ?? "participation") !== "certification" && (
             <>
@@ -833,18 +842,20 @@ export function CertificateManagementPage() {
               </label>
             </>
           )}
-          <textarea className="min-h-24 rounded-md border border-slate-300 px-3 py-2 sm:col-span-2" onChange={(event) => setCertificateForm({ ...certificateForm, notes: event.target.value })} placeholder="Optional remarks" value={certificateForm.notes} />
+          <textarea className="min-h-24 rounded-md border border-slate-300 px-3 py-2 sm:col-span-2" onChange={(event) => setCertificateForm({ ...certificateForm, notes: event.target.value })} placeholder={(certificateForm.certificateFormat ?? "participation") === "recognition" ? "Details of Recognition / reason" : "Optional remarks"} required={(certificateForm.certificateFormat ?? "participation") === "recognition"} value={certificateForm.notes} />
         </div>
       </ModalForm>
 
-      <ModalForm onClose={() => setParticipantOpen(false)} onSubmit={saveParticipant} open={participantOpen} submitLabel={editingParticipant ? "Save Participant" : "Add Participant"} title={editingParticipant ? "Edit Participant" : "Add Participant"}>
+      <ModalForm onClose={() => setParticipantOpen(false)} onSubmit={saveParticipant} open={participantOpen} submitLabel={editingParticipant ? "Save" : selectedCertificate?.certificateFormat === "recognition" ? "Add Recipient" : "Add Participant"} title={editingParticipant ? selectedCertificate?.certificateFormat === "recognition" ? "Edit Recipient" : "Edit Participant" : selectedCertificate?.certificateFormat === "recognition" ? "Add Recipient" : "Add Participant"}>
         <div className="grid gap-4 sm:grid-cols-2">
           <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setParticipantForm({ ...participantForm, certificateNo: event.target.value })} placeholder="Certificate / Control No." required value={participantForm.certificateNo} />
-          <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setParticipantForm({ ...participantForm, hoursAttended: Number(event.target.value) })} placeholder="Hours attended" required step="0.5" type="number" value={participantForm.hoursAttended} />
+          {selectedCertificate?.certificateFormat !== "recognition" && (
+            <input className="h-11 rounded-md border border-slate-300 px-3" min={0} onChange={(event) => setParticipantForm({ ...participantForm, hoursAttended: Number(event.target.value) })} placeholder="Hours attended" required step="0.5" type="number" value={participantForm.hoursAttended} />
+          )}
           {editingParticipant ? (
             <>
-              <input className="h-11 rounded-md border border-slate-300 px-3 sm:col-span-2" onChange={(event) => setParticipantForm({ ...participantForm, participantName: event.target.value })} placeholder="Participant name" required value={participantForm.participantName} />
-              <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setParticipantForm({ ...participantForm, participantRole: event.target.value })} placeholder="Participant role / position" value={participantForm.participantRole} />
+              <input className="h-11 rounded-md border border-slate-300 px-3 sm:col-span-2" onChange={(event) => setParticipantForm({ ...participantForm, participantName: event.target.value })} placeholder={selectedCertificate?.certificateFormat === "recognition" ? "Recipient name" : "Participant name"} required value={participantForm.participantName} />
+              <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setParticipantForm({ ...participantForm, participantRole: event.target.value })} placeholder={selectedCertificate?.certificateFormat === "recognition" ? "Recipient role / position" : "Participant role / position"} value={participantForm.participantRole} />
               <input className="h-11 rounded-md border border-slate-300 px-3" onChange={(event) => setParticipantForm({ ...participantForm, participantOffice: event.target.value })} placeholder="Office / department" value={participantForm.participantOffice} />
             </>
           ) : (

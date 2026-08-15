@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardList, Plus, Save, Search, Trash2, UsersRound, XCircle } from "lucide-react";
+import { BriefcaseBusiness, CalendarDays, CheckCircle2, ClipboardList, Minus, Plus, Save, Search, Trash2, UsersRound, XCircle } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "../components/common/PageHeader";
 import { SummaryCard } from "../components/common/SummaryCard";
@@ -6,9 +6,11 @@ import { subscribeCollection } from "../services/firestoreCrud";
 import {
   deleteAllPersonnelAttendance,
   deletePersonnelAttendanceByDate,
+  adjustPersonnelCredit,
+  getAttendanceId,
+  subscribePersonnelCreditLogs,
   subscribePersonnelCredits,
   upsertPersonnelAttendanceBatch,
-  upsertPersonnelCredit,
 } from "../services/personnelAttendanceService";
 import { subscribeTeachers } from "../services/teacherService";
 import { useAuth } from "../providers/AuthProvider";
@@ -17,6 +19,8 @@ import type {
   PersonnelAttendanceRecord,
   PersonnelAttendanceStatus,
   PersonnelCreditBalance,
+  PersonnelCreditLog,
+  PersonnelCreditType,
   PersonnelStaffType,
   Teacher,
 } from "../types/loading";
@@ -29,11 +33,7 @@ type StaffRow = {
   staffType: PersonnelStaffType;
 };
 
-type AttendanceDraft = Pick<PersonnelAttendanceRecord, "status" | "remarks">;
-type CreditDraft = Pick<
-  PersonnelCreditBalance,
-  "specialOrderServiceCredit" | "localServiceCredit" | "wellnessBreak" | "leaveCredits" | "remarks"
->;
+type AttendanceDraft = Pick<PersonnelAttendanceRecord, "status" | "remarks" | "absenceCreditType">;
 type DailyAttendanceSummary = {
   attendanceDate: string;
   recorded: number;
@@ -49,6 +49,13 @@ const attendanceStatuses: Array<{ value: PersonnelAttendanceStatus; label: strin
   { value: "present", label: "Present" },
   { value: "absent", label: "Absent" },
   { value: "official_business", label: "Official Business" },
+];
+
+const creditTypes: Array<{ value: PersonnelCreditType; label: string }> = [
+  { value: "specialOrderServiceCredit", label: "Special Order Service Credit" },
+  { value: "localServiceCredit", label: "Local Service Credit" },
+  { value: "wellnessBreak", label: "Wellness Break" },
+  { value: "leaveCredits", label: "Leave Credits" },
 ];
 
 const staffTypeLabels: Record<PersonnelStaffType, string> = {
@@ -78,6 +85,17 @@ function formatDate(value: string) {
   }).format(new Date(`${value}T00:00:00`));
 }
 
+function formatTimestamp(value: PersonnelCreditLog["createdAt"]) {
+  if (!value?.toDate) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(value.toDate());
+}
+
 function normalizeStaffName(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -95,22 +113,17 @@ function getStaffNameSignature(value: string) {
 function getDefaultDraft(record?: PersonnelAttendanceRecord): AttendanceDraft {
   return {
     status: attendanceStatuses.some((status) => status.value === record?.status) ? record?.status ?? "present" : "present",
+    absenceCreditType: record?.absenceCreditType,
     remarks: record?.remarks ?? "",
-  };
-}
-
-function getDefaultCreditDraft(credit?: PersonnelCreditBalance): CreditDraft {
-  return {
-    specialOrderServiceCredit: credit?.specialOrderServiceCredit ?? 0,
-    localServiceCredit: credit?.localServiceCredit ?? 0,
-    wellnessBreak: credit?.wellnessBreak ?? 0,
-    leaveCredits: credit?.leaveCredits ?? 0,
-    remarks: credit?.remarks ?? "",
   };
 }
 
 function getNumberInputValue(value: number) {
   return Number.isFinite(value) ? String(value) : "0";
+}
+
+function getCreditLabel(value?: PersonnelCreditType) {
+  return creditTypes.find((type) => type.value === value)?.label ?? "None";
 }
 
 export function PersonnelAttendancePage() {
@@ -120,8 +133,8 @@ export function PersonnelAttendancePage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [allAttendanceRecords, setAllAttendanceRecords] = useState<PersonnelAttendanceRecord[]>([]);
   const [credits, setCredits] = useState<PersonnelCreditBalance[]>([]);
+  const [creditLogs, setCreditLogs] = useState<PersonnelCreditLog[]>([]);
   const [drafts, setDrafts] = useState<Record<string, AttendanceDraft>>({});
-  const [creditDrafts, setCreditDrafts] = useState<Record<string, CreditDraft>>({});
   const [staffTypeFilter, setStaffTypeFilter] = useState<"all" | PersonnelStaffType>("all");
   const [search, setSearch] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -135,6 +148,7 @@ export function PersonnelAttendancePage() {
   useEffect(() => subscribeCollection<UserProfile>("users", setUsers), []);
   useEffect(() => subscribeCollection<PersonnelAttendanceRecord>("personnelAttendance", setAllAttendanceRecords), []);
   useEffect(() => subscribePersonnelCredits(setCredits), []);
+  useEffect(() => subscribePersonnelCreditLogs(setCreditLogs), []);
   useEffect(() => {
     function warnBeforeUnload(event: BeforeUnloadEvent) {
       if (Object.keys(drafts).length === 0) return;
@@ -263,12 +277,15 @@ export function PersonnelAttendancePage() {
   function updateDraft(row: StaffRow, updates: Partial<AttendanceDraft>) {
     const key = getAttendanceKey(row.staffType, row.staffId);
     const record = recordsByStaffKey.get(key);
+    const nextUpdates = updates.status && updates.status !== "absent"
+      ? { ...updates, absenceCreditType: undefined }
+      : updates;
     setDrafts((current) => ({
       ...current,
       [key]: {
         ...getDefaultDraft(record),
         ...current[key],
-        ...updates,
+        ...nextUpdates,
       },
     }));
   }
@@ -278,27 +295,33 @@ export function PersonnelAttendancePage() {
     return drafts[key] ?? getDefaultDraft(recordsByStaffKey.get(key));
   }
 
-  function updateCreditDraft(row: StaffRow, updates: Partial<CreditDraft>) {
-    const credit = creditsByStaffId.get(row.staffId);
-    setCreditDrafts((current) => ({
-      ...current,
-      [row.staffId]: {
-        ...getDefaultCreditDraft(credit),
-        ...current[row.staffId],
-        ...updates,
-      },
-    }));
-  }
-
-  function getCreditDraft(row: StaffRow) {
-    return creditDrafts[row.staffId] ?? getDefaultCreditDraft(creditsByStaffId.get(row.staffId));
-  }
-
   function selectAttendanceDate(nextDate: string) {
     if (nextDate === attendanceDate) return;
     if (Object.keys(drafts).length > 0 && !window.confirm("You have unsaved attendance changes. Continue without saving?")) return;
     setDrafts({});
     setAttendanceDate(nextDate);
+  }
+
+  function getCreditBalance(row: StaffRow, creditType: PersonnelCreditType) {
+    return creditsByStaffId.get(row.staffId)?.[creditType] ?? 0;
+  }
+
+  function getCreditRecordForRow(row: StaffRow, overrides: Partial<PersonnelCreditBalance> = {}) {
+    const currentCredit = creditsByStaffId.get(row.staffId);
+    return {
+      staffId: row.staffId,
+      staffName: row.staffName,
+      staffType: row.staffType,
+      roleOrPosition: row.roleOrPosition,
+      specialOrderServiceCredit: currentCredit?.specialOrderServiceCredit ?? 0,
+      localServiceCredit: currentCredit?.localServiceCredit ?? 0,
+      wellnessBreak: currentCredit?.wellnessBreak ?? 0,
+      leaveCredits: currentCredit?.leaveCredits ?? 0,
+      remarks: currentCredit?.remarks ?? "",
+      updatedBy: profile?.userId ?? "",
+      updaterName: profile?.fullName ?? "",
+      ...overrides,
+    };
   }
 
   async function saveAttendanceForDate(dateToSave = attendanceDate, remarkOverride?: string) {
@@ -309,24 +332,88 @@ export function PersonnelAttendancePage() {
     setError("");
 
     try {
-      const savedCount = await upsertPersonnelAttendanceBatch(staffRows.map((row) => {
+      const attendanceRecords = staffRows.map((row) => {
         const draft = getDraft(row);
+        const status = dateToSave === attendanceDate ? draft.status : "present";
 
         return {
-        attendanceDate: dateToSave,
-        staffType: row.staffType,
-        staffId: row.staffId,
-        staffName: row.staffName,
-        roleOrPosition: row.roleOrPosition,
-        status: dateToSave === attendanceDate ? draft.status : "present",
-        remarks: typeof remarkOverride === "string" ? remarkOverride.trim() : draft.remarks.trim(),
-        recordedBy: profile.userId,
-        recorderName: profile.fullName,
+          attendanceDate: dateToSave,
+          staffType: row.staffType,
+          staffId: row.staffId,
+          staffName: row.staffName,
+          roleOrPosition: row.roleOrPosition,
+          status,
+          ...(status === "absent" && draft.absenceCreditType ? { absenceCreditType: draft.absenceCreditType } : {}),
+          remarks: typeof remarkOverride === "string" ? remarkOverride.trim() : draft.remarks.trim(),
+          recordedBy: profile.userId,
+          recorderName: profile.fullName,
         };
-      }));
+      });
+      const previousRecordsByStaffKey = new Map(
+        allAttendanceRecords
+          .filter((record) => record.attendanceDate === dateToSave)
+          .map((record) => [getAttendanceKey(record.staffType, record.staffId), record]),
+      );
+      const creditUpdatesByStaffId = new Map<string, ReturnType<typeof getCreditRecordForRow>>();
+      const creditLogs: Array<Omit<PersonnelCreditLog, "logId" | "createdAt">> = [];
+
+      for (const row of staffRows) {
+        const nextRecord = attendanceRecords.find((record) => record.staffId === row.staffId && record.staffType === row.staffType);
+        const previousRecord = previousRecordsByStaffKey.get(getAttendanceKey(row.staffType, row.staffId));
+        const previousCreditType = previousRecord?.status === "absent" ? previousRecord.absenceCreditType : undefined;
+        const nextCreditType = nextRecord?.status === "absent" ? nextRecord.absenceCreditType : undefined;
+
+        if (nextRecord?.status === "absent" && !nextCreditType) {
+          throw new Error(`Choose a credit type for ${row.staffName}'s absence.`);
+        }
+
+        const creditChanges: Array<{ creditType: PersonnelCreditType; amount: number; source: PersonnelCreditLog["source"] }> = [];
+        if (previousCreditType) creditChanges.push({ creditType: previousCreditType, amount: 1, source: "absence_refund" });
+        if (nextCreditType) creditChanges.push({ creditType: nextCreditType, amount: -1, source: "absence_deduction" });
+        if (creditChanges.length === 0) continue;
+
+        let creditRecord = creditUpdatesByStaffId.get(row.staffId) ?? getCreditRecordForRow(row);
+        creditChanges.forEach((change) => {
+          const previousBalance = creditRecord[change.creditType];
+          const newBalance = previousBalance + change.amount;
+          if (newBalance < 0) {
+            throw new Error(`${row.staffName} does not have enough ${getCreditLabel(change.creditType)}.`);
+          }
+
+          creditLogs.push({
+            staffId: row.staffId,
+            staffName: row.staffName,
+            staffType: row.staffType,
+            roleOrPosition: row.roleOrPosition,
+            creditType: change.creditType,
+            source: change.source,
+            amount: change.amount,
+            previousBalance,
+            newBalance,
+            attendanceId: getAttendanceId(dateToSave, row.staffType, row.staffId),
+            attendanceDate: dateToSave,
+            remarks: change.source === "absence_deduction"
+              ? `Deducted for absence on ${formatDate(dateToSave)}.`
+              : `Returned after attendance change on ${formatDate(dateToSave)}.`,
+            createdBy: profile.userId,
+            creatorName: profile.fullName,
+          });
+          creditRecord = {
+            ...creditRecord,
+            [change.creditType]: newBalance,
+          };
+        });
+        creditUpdatesByStaffId.set(row.staffId, creditRecord);
+      }
+
+      const savedCount = await upsertPersonnelAttendanceBatch(
+        attendanceRecords,
+        Array.from(creditUpdatesByStaffId.values()),
+        creditLogs,
+      );
       setAttendanceDate(dateToSave);
       setDrafts({});
-      setMessage(`Saved attendance for ${savedCount} personnel on ${formatDate(dateToSave)}.`);
+      setMessage(`Saved attendance for ${savedCount} personnel on ${formatDate(dateToSave)}${creditLogs.length ? ` and logged ${creditLogs.length} credit transaction${creditLogs.length === 1 ? "" : "s"}.` : "."}`);
     } catch (caught) {
       console.error(caught);
       setError(caught instanceof Error ? caught.message : "Unable to save attendance.");
@@ -388,35 +475,53 @@ export function PersonnelAttendancePage() {
     }
   }
 
-  async function saveAllCredits() {
+  async function adjustCreditForRow(row: StaffRow, direction: 1 | -1) {
     if (!profile) return;
+    const selectedType = window.prompt(
+      `Which credit should be ${direction > 0 ? "added" : "subtracted"}?\n\n${creditTypes.map((type, index) => `${index + 1}. ${type.label}`).join("\n")}`,
+      "1",
+    );
+    if (selectedType === null) return;
+
+    const optionIndex = Number(selectedType.trim()) - 1;
+    const creditType = creditTypes[optionIndex]?.value;
+    if (!creditType) {
+      setMessage("");
+      setError("Choose a valid credit option number.");
+      return;
+    }
+
+    const amountValue = window.prompt(`Enter credit amount to ${direction > 0 ? "add" : "subtract"}.`, "1");
+    if (amountValue === null) return;
+
+    const amount = Number(amountValue);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage("");
+      setError("Enter a valid credit amount greater than zero.");
+      return;
+    }
+
+    const remarks = window.prompt("Reason for this credit adjustment.", "");
+    if (remarks === null) return;
 
     setIsSavingCredits(true);
     setMessage("");
     setError("");
 
     try {
-      await Promise.all(staffRows.map((row) => {
-        const draft = getCreditDraft(row);
-
-        return upsertPersonnelCredit({
-          staffId: row.staffId,
-          staffName: row.staffName,
-          staffType: row.staffType,
-          roleOrPosition: row.roleOrPosition,
-          specialOrderServiceCredit: draft.specialOrderServiceCredit,
-          localServiceCredit: draft.localServiceCredit,
-          wellnessBreak: draft.wellnessBreak,
-          leaveCredits: draft.leaveCredits,
-          remarks: (draft.remarks ?? "").trim(),
+      await adjustPersonnelCredit(
+        getCreditRecordForRow(row, {
           updatedBy: profile.userId,
           updaterName: profile.fullName,
-        });
-      }));
-      setMessage(`Saved credit balances for ${staffRows.length} personnel.`);
+        }),
+        creditType,
+        amount * direction,
+        remarks.trim() || `${direction > 0 ? "Added" : "Subtracted"} ${getCreditLabel(creditType)}.`,
+      );
+      setMessage(`${direction > 0 ? "Added" : "Subtracted"} ${amount} ${getCreditLabel(creditType)} for ${row.staffName}.`);
     } catch (caught) {
       console.error(caught);
-      setError(caught instanceof Error ? caught.message : "Unable to save credit balances.");
+      setError(caught instanceof Error ? caught.message : "Unable to adjust credit balance.");
     } finally {
       setIsSavingCredits(false);
     }
@@ -598,6 +703,7 @@ export function PersonnelAttendancePage() {
                                   <th className="px-4 py-3 font-semibold">Personnel</th>
                                   <th className="px-4 py-3 font-semibold">Type</th>
                                   <th className="px-4 py-3 font-semibold">Status</th>
+                                  <th className="px-4 py-3 font-semibold">Credit Used</th>
                                   <th className="px-4 py-3 font-semibold">Remarks</th>
                                 </tr>
                               </thead>
@@ -627,6 +733,24 @@ export function PersonnelAttendancePage() {
                                             <option key={status.value} value={status.value}>{status.label}</option>
                                           ))}
                                         </select>
+                                      </td>
+                                      <td className="px-4 py-3">
+                                        {draft.status === "absent" ? (
+                                          <select
+                                            className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm"
+                                            onChange={(event) => updateDraft(row, { absenceCreditType: event.target.value as PersonnelCreditType })}
+                                            value={draft.absenceCreditType ?? ""}
+                                          >
+                                            <option value="">Choose credit</option>
+                                            {creditTypes.map((type) => (
+                                              <option key={type.value} value={type.value}>
+                                                {type.label} ({getCreditBalance(row, type.value)})
+                                              </option>
+                                            ))}
+                                          </select>
+                                        ) : (
+                                          <span className="text-xs font-medium text-slate-400">Not applicable</span>
+                                        )}
                                       </td>
                                       <td className="px-4 py-3">
                                         <input
@@ -663,19 +787,11 @@ export function PersonnelAttendancePage() {
         <div className="flex flex-col justify-between gap-3 border-b border-slate-200 px-4 py-3 md:flex-row md:items-center">
           <div>
             <h2 className="text-sm font-semibold text-slate-950">Credit Balances</h2>
-            <p className="mt-1 text-xs text-slate-500">Update remaining service credits, wellness break, and leave credits for personnel.</p>
+            <p className="mt-1 text-xs text-slate-500">Balances are locked. Use the + and - buttons to add or subtract credits with a log entry.</p>
           </div>
-          <button
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-civic px-4 text-sm font-semibold text-white hover:bg-civic/90 disabled:opacity-50"
-            disabled={isSaving || isSavingCredits || isDeleting || staffRows.length === 0}
-            onClick={() => void saveAllCredits()}
-            type="button"
-          >
-            <Save size={16} /> {isSavingCredits ? "Saving..." : "Save Credits"}
-          </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] text-left text-sm">
+          <table className="w-full min-w-[980px] text-left text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr>
                 <th className="px-4 py-3 font-semibold">Personnel</th>
@@ -688,62 +804,43 @@ export function PersonnelAttendancePage() {
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {visibleRows.map((row) => {
-                const draft = getCreditDraft(row);
+                const credit = creditsByStaffId.get(row.staffId);
 
                 return (
                   <tr key={`${row.staffId}-credits`}>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-slate-950">{row.staffName}</p>
-                      <p className="mt-1 text-xs text-slate-500">{row.roleOrPosition}</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-slate-950">{row.staffName}</p>
+                          <p className="mt-1 text-xs text-slate-500">{row.roleOrPosition}</p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isSaving || isSavingCredits || isDeleting}
+                            onClick={() => void adjustCreditForRow(row, 1)}
+                            title="Add credit"
+                            type="button"
+                          >
+                            <Plus size={16} />
+                          </button>
+                          <button
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={isSaving || isSavingCredits || isDeleting}
+                            onClick={() => void adjustCreditForRow(row, -1)}
+                            title="Subtract credit"
+                            type="button"
+                          >
+                            <Minus size={16} />
+                          </button>
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-4 py-3">
-                      <input
-                        className="h-9 w-full rounded-md border border-slate-300 px-2 text-sm"
-                        min="0"
-                        onChange={(event) => updateCreditDraft(row, { specialOrderServiceCredit: Number(event.target.value) })}
-                        step="0.5"
-                        type="number"
-                        value={getNumberInputValue(draft.specialOrderServiceCredit)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <input
-                        className="h-9 w-full rounded-md border border-slate-300 px-2 text-sm"
-                        min="0"
-                        onChange={(event) => updateCreditDraft(row, { localServiceCredit: Number(event.target.value) })}
-                        step="0.5"
-                        type="number"
-                        value={getNumberInputValue(draft.localServiceCredit)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <input
-                        className="h-9 w-full rounded-md border border-slate-300 px-2 text-sm"
-                        min="0"
-                        onChange={(event) => updateCreditDraft(row, { wellnessBreak: Number(event.target.value) })}
-                        step="0.5"
-                        type="number"
-                        value={getNumberInputValue(draft.wellnessBreak)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <input
-                        className="h-9 w-full rounded-md border border-slate-300 px-2 text-sm"
-                        min="0"
-                        onChange={(event) => updateCreditDraft(row, { leaveCredits: Number(event.target.value) })}
-                        step="0.5"
-                        type="number"
-                        value={getNumberInputValue(draft.leaveCredits)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <input
-                        className="h-9 w-full rounded-md border border-slate-300 px-2 text-sm"
-                        onChange={(event) => updateCreditDraft(row, { remarks: event.target.value })}
-                        placeholder="Optional notes"
-                        value={draft.remarks}
-                      />
-                    </td>
+                    <td className="px-4 py-3 font-semibold text-slate-950">{getNumberInputValue(credit?.specialOrderServiceCredit ?? 0)}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-950">{getNumberInputValue(credit?.localServiceCredit ?? 0)}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-950">{getNumberInputValue(credit?.wellnessBreak ?? 0)}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-950">{getNumberInputValue(credit?.leaveCredits ?? 0)}</td>
+                    <td className="px-4 py-3 text-slate-500">{credit?.remarks || "None"}</td>
                   </tr>
                 );
               })}
@@ -752,6 +849,58 @@ export function PersonnelAttendancePage() {
         </div>
         {visibleRows.length === 0 && (
           <div className="p-5 text-sm text-slate-600">No personnel found for credit balances.</div>
+        )}
+      </div>
+
+      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-slate-950">Credit Transaction Log</h2>
+          <p className="mt-1 text-xs text-slate-500">Manual adjustments and automatic absence deductions are recorded here for transparency.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1100px] text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Date / Time</th>
+                <th className="px-4 py-3 font-semibold">Personnel</th>
+                <th className="px-4 py-3 font-semibold">Credit Type</th>
+                <th className="px-4 py-3 font-semibold">Change</th>
+                <th className="px-4 py-3 font-semibold">Balance</th>
+                <th className="px-4 py-3 font-semibold">Source</th>
+                <th className="px-4 py-3 font-semibold">Remarks</th>
+                <th className="px-4 py-3 font-semibold">Encoded By</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 text-slate-700">
+              {creditLogs.slice(0, 80).map((log) => (
+                <tr key={log.logId}>
+                  <td className="px-4 py-3">
+                    <p className="font-medium text-slate-950">{formatTimestamp(log.createdAt) || "Pending"}</p>
+                    {log.attendanceDate && <p className="mt-1 text-xs text-slate-500">Attendance: {formatDate(log.attendanceDate)}</p>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="font-medium text-slate-950">{log.staffName}</p>
+                    <p className="mt-1 text-xs text-slate-500">{log.roleOrPosition}</p>
+                  </td>
+                  <td className="px-4 py-3">{getCreditLabel(log.creditType)}</td>
+                  <td className={`px-4 py-3 font-bold ${log.amount >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                    {log.amount >= 0 ? "+" : ""}{log.amount}
+                  </td>
+                  <td className="px-4 py-3">{log.previousBalance} → {log.newBalance}</td>
+                  <td className="px-4 py-3">
+                    <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-200">
+                      {log.source.replace(/_/g, " ")}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">{log.remarks || "None"}</td>
+                  <td className="px-4 py-3">{log.creatorName}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {creditLogs.length === 0 && (
+          <div className="p-5 text-sm text-slate-600">No credit transactions have been logged yet.</div>
         )}
       </div>
     </section>

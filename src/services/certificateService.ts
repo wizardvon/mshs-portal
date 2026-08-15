@@ -3,7 +3,6 @@ import { db } from "../firebase";
 import type { CertificateParticipant, CertificatePerson, CertificatePersonType, CertificateRecord } from "../types";
 import { createRecord, deleteRecord, subscribeCollection, updateRecord } from "./firestoreCrud";
 
-export const certificateEventTypes = ["LAC Session", "Training", "Seminar"] as const;
 export const certificateStatuses = ["valid", "revoked"] as const;
 
 export const subscribeCertificates = (callback: (certificates: CertificateRecord[]) => void) =>

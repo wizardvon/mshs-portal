@@ -18,6 +18,7 @@ import type { CertificateFormat, CertificateParticipant, CertificateRecord } fro
 const formatLabels: Record<CertificateFormat, string> = {
   certification: "CERTIFICATION",
   participation: "Certificate of Participation",
+  recognition: "Certificate of Recognition",
 };
 
 function escapeHtml(value: unknown) {
@@ -98,14 +99,20 @@ function certificateBody(format: CertificateFormat, participant: CertificatePart
     return `This certifies that <strong>${escapeHtml(participant.participantName)}</strong> has attended and completed the requirements of <strong>${eventTitle}</strong>, conducted on ${dateRange} at ${venue}${hours ? ` for ${hours} hour${hours === 1 ? "" : "s"}` : ""}.`;
   }
 
+  if (format === "recognition") {
+    const recognitionDetails = certificate.notes || certificate.eventTitle;
+    return `is hereby awarded this certificate in recognition of <strong>${escapeHtml(recognitionDetails)}</strong>, given on ${dateRange} at ${venue}.`;
+  }
+
   return `is hereby awarded this certificate for actively participating in <strong>${eventTitle}</strong>, conducted on ${dateRange} at ${venue}${hours ? ` with ${hours} hour${hours === 1 ? "" : "s"} of participation` : ""}.`;
 }
 
 function buildParticipationPage(
   certificate: CertificateRecord,
   participant: CertificateParticipant,
+  certificateFormat: CertificateFormat = "participation",
 ) {
-  const format: CertificateFormat = "participation";
+  const format: CertificateFormat = certificateFormat;
   const validationUrl = getValidationUrl(participant.participantId);
   const signatoryName =
     certificate.certificationSignatoryName || certificate.issuedBy || "Mataasnakahoy Senior High School";
@@ -195,7 +202,7 @@ function buildCertificatePage(
 ) {
   return format === "certification"
     ? buildCertificationPage(certificate, participant)
-    : buildParticipationPage(certificate, participant);
+    : buildParticipationPage(certificate, participant, format);
 }
 
 function openPrintableCertificates(
@@ -554,8 +561,8 @@ export function PrintableCertificatesPage() {
               <p className="mt-1 font-semibold text-ink">{selectedCertificate.eventTitle}</p>
             </div>
             <div>
-              <p className="text-xs font-bold uppercase text-slate-400">Type</p>
-              <p className="mt-1">{selectedCertificate.eventType}</p>
+              <p className="text-xs font-bold uppercase text-slate-400">Format</p>
+              <p className="mt-1">{formatLabels[format]}</p>
             </div>
             <div>
               <p className="text-xs font-bold uppercase text-slate-400">Date</p>

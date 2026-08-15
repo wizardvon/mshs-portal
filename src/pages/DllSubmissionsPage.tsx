@@ -135,7 +135,7 @@ export function DllSubmissionsPage() {
 
   const isSuperAdmin = profile?.role === "super_admin";
   const isReviewer = profile?.role === "principal" || profile?.role === "master_teacher" || profile?.role === "super_admin";
-  const canCreateRequest = isReviewer;
+  const canCreateRequest = isSuperAdmin || profile?.role === "master_teacher";
   const isTeacherSubmitter = profile?.role === "teacher" || profile?.role === "master_teacher";
   const submitterTeacherId = isTeacherSubmitter ? profile?.assignedTeacherId ?? "" : "";
   const scopedTeacherId = profile?.role === "teacher" ? submitterTeacherId : "";

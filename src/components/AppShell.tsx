@@ -2,8 +2,10 @@ import {
   Archive,
   Award,
   BarChart3,
+  BellRing,
   BookOpen,
   CalendarDays,
+  Calculator,
   ClipboardList,
   FileSpreadsheet,
   FileCheck2,
@@ -45,6 +47,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [portalSettings, setPortalSettings] = useState<UserPortalSettings>(defaultUserPortalSettings);
+  const themeClass = portalSettings.theme === "dark_mode" ? "dark" : portalSettings.theme;
   const closeSidebar = () => setSidebarOpen(false);
   const canSee = (moduleId: Parameters<typeof canAccessModule>[1]) =>
     canAccessModule(profile, moduleId);
@@ -57,6 +60,7 @@ export function AppShell() {
     canSee("document_requests") ||
     canSee("tosia_pro") ||
     canSee("mps") ||
+    canSee("grade_computation") ||
     canSee("grade_submissions") ||
     canSee("grade_summary");
   const showMonitoringGroup =
@@ -81,7 +85,7 @@ export function AppShell() {
   }
 
   return (
-    <main className={`min-h-screen bg-mist portal-theme-${portalSettings.theme} portal-density-${portalSettings.density}`}>
+    <main className={`min-h-screen bg-mist portal-theme-${themeClass} portal-density-${portalSettings.density}`}>
       <div className="flex min-h-screen">
         {sidebarOpen && (
           <button
@@ -127,6 +131,7 @@ export function AppShell() {
           <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto pb-4 pr-1">
             <SidebarSectionLabel>Main</SidebarSectionLabel>
             {canSee("dashboard") && <SidebarLink icon={LayoutDashboard} label="Dashboard" onClick={closeSidebar} to="/dashboard" />}
+            {canSee("announcements") && <SidebarLink icon={BellRing} label="Announcements" onClick={closeSidebar} to="/announcements" />}
             {canSee("personnel_settings") && <SidebarLink icon={Settings} label="Settings" onClick={closeSidebar} to="/personnel-settings" />}
             {canSee("loading") && <SidebarLink icon={Table2} label="SHS Loading" onClick={closeSidebar} to="/loading" />}
             {canSee("teachers") && <SidebarLink icon={GraduationCap} label="Teachers" onClick={closeSidebar} to="/teachers" />}
@@ -141,6 +146,7 @@ export function AppShell() {
             {canSee("document_requests") && <SidebarLink icon={FileText} label="Document Requests" onClick={closeSidebar} to="/document-requests" />}
             {canSee("tosia_pro") && <SidebarLink icon={ClipboardList} label="TOSIA Pro" onClick={closeSidebar} to="/tosia-pro" />}
             {canSee("mps") && <SidebarLink icon={BarChart3} label="MPS" onClick={closeSidebar} to="/mps" />}
+            {canSee("grade_computation") && <SidebarLink icon={Calculator} label="Computation of Grades" onClick={closeSidebar} to="/grade-computation" />}
             {canSee("grade_submissions") && <SidebarLink icon={FilePenLine} label="Grade Submission" onClick={closeSidebar} to="/grade-submissions" />}
             {canSee("grade_summary") && <SidebarLink icon={ClipboardList} label="Summary of Grades" onClick={closeSidebar} to="/grade-summary" />}
             {showMonitoringGroup && <SidebarSectionLabel>Monitoring</SidebarSectionLabel>}

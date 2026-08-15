@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { BackupRestorePage } from "./pages/BackupRestorePage";
+import { AnnouncementsPage } from "./pages/AnnouncementsPage";
 import { CertificateManagementPage } from "./pages/CertificateManagementPage";
 import { CertificateVerificationPage } from "./pages/CertificateVerificationPage";
 import { CurriculumMappingPage } from "./pages/CurriculumMappingPage";
@@ -10,6 +11,7 @@ import { DocumentRequestsPage } from "./pages/DocumentRequestsPage";
 import { DllSubmissionsPage } from "./pages/DllSubmissionsPage";
 import { EnrollmentPage } from "./pages/EnrollmentPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
+import { GradeComputationPage } from "./pages/GradeComputationPage";
 import { GradeSubmissionsPage } from "./pages/GradeSubmissionsPage";
 import { GradeSummaryPage } from "./pages/GradeSummaryPage";
 import { LoadAssignmentPage } from "./pages/LoadAssignmentPage";
@@ -49,6 +51,9 @@ export default function App() {
           <Route element={<ProtectedRoute requiredModule="dashboard" />}>
             <Route path="/dashboard" element={<DashboardPage />} />
           </Route>
+          <Route element={<ProtectedRoute requiredModule="announcements" />}>
+            <Route path="/announcements" element={<AnnouncementsPage />} />
+          </Route>
           <Route element={<ProtectedRoute requiredModule="teachers" />}>
             <Route path="/teachers" element={<TeachersPage />} />
           </Route>
@@ -81,6 +86,9 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute requiredModule="mps" />}>
             <Route path="/mps" element={<MpsPage />} />
+          </Route>
+          <Route element={<ProtectedRoute requiredModule="grade_computation" />}>
+            <Route path="/grade-computation" element={<GradeComputationPage />} />
           </Route>
           <Route element={<ProtectedRoute requiredModule="grade_submissions" />}>
             <Route path="/grade-submissions" element={<GradeSubmissionsPage />} />

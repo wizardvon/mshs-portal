@@ -1,0 +1,59 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isApprovedUser() {
+      return signedIn() && profile().data.status == "approved";
+    }
+
+    function isAnnouncementManager() {
+      return isApprovedUser() && profile().data.role in ["super_admin", "admin"];
+    }
+
+    function announcement(announcementId) {
+      return firestore.get(/databases/(default)/documents/announcements/$(announcementId));
+    }
+
+    function canReadAnnouncementFile(announcementId) {
+      let item = announcement(announcementId);
+      return isApprovedUser()
+        && (
+          isAnnouncementManager()
+          || item.data.postedByUid == request.auth.uid
+          || item.data.authorizedUserIds.hasAny([request.auth.uid])
+        );
+    }
+
+    function canWriteAnnouncementFile(announcementId) {
+      let item = announcement(announcementId);
+      return isApprovedUser()
+        && (
+          isAnnouncementManager()
+          || item.data.postedByUid == request.auth.uid
+        );
+    }
+
+    function validAnnouncementUpload(announcementId) {
+      return request.resource.size > 0
+        && request.resource.size <= 50 * 1024 * 1024
+        && request.resource.contentType.matches("application/pdf|image/(jpeg|png|webp)")
+        && request.resource.metadata.announcementId == announcementId
+        && request.resource.metadata.uploadedBy == request.auth.uid;
+    }
+
+    match /announcements/{announcementId}/{fileName} {
+      allow read: if canReadAnnouncementFile(announcementId);
+      allow create, update: if canWriteAnnouncementFile(announcementId)
+        && validAnnouncementUpload(announcementId);
+      allow delete: if canWriteAnnouncementFile(announcementId);
+    }
+  }
+}

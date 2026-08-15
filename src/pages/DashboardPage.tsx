@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   BadgeCheck,
   BarChart3,
+  BellRing,
   BriefcaseBusiness,
   CalendarClock,
   CalendarDays,
@@ -25,18 +26,26 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { subscribeLoadAssignments } from "../services/assignmentService";
+import { fetchAnnouncementsPage } from "../services/announcementService";
 import { subscribeDocumentRequests, subscribeDocumentRequestSubmissions } from "../services/documentRequestService";
 import { subscribeDllRequests, subscribeDllSubmissions } from "../services/dllSubmissionService";
 import { subscribeMpsRequests, subscribeMpsSubmissions } from "../services/mpsService";
 import { subscribeObservationSchedules } from "../services/observationService";
 import { subscribeCollection } from "../services/firestoreCrud";
+import {
+  getCertificate,
+  subscribeCertificateParticipantsByStaff,
+  subscribeCertificateParticipantsByUser,
+  subscribeCertificates,
+} from "../services/certificateService";
 import { subscribePersonnelAttendanceByDate, subscribePersonnelAttendanceByDateRange } from "../services/personnelAttendanceService";
 import { subscribeClassSchedulesByPeriod } from "../services/scheduleService";
 import { defaultAcademicSettings, subscribeAcademicSettings } from "../services/settingsService";
 import { subscribeTeachers } from "../services/teacherService";
 import { defaultUserPortalSettings, subscribeUserPortalSettings, type UserPortalSettings } from "../services/userSettingsService";
 import { useAuth } from "../providers/AuthProvider";
-import type { AppModule, UserProfile } from "../types";
+import type { AppModule, CertificateParticipant, CertificateRecord, UserProfile } from "../types";
+import type { Announcement } from "../types/announcements";
 import type {
   AcademicSettings,
   ClassScheduleEntry,
@@ -126,6 +135,16 @@ function getCurrentMonthRange() {
     startDate: formatDate(start),
     endDate: formatDate(today),
   };
+}
+
+function formatAnnouncementDate(value?: Announcement["createdAt"]) {
+  if (!value?.toDate) return "Just now";
+  return new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(value.toDate());
 }
 
 function getSubmissionKey(requestId: string, teacherId: string, subjectId: string) {
@@ -242,16 +261,58 @@ export function DashboardPage() {
   const [monthlyAttendanceRecords, setMonthlyAttendanceRecords] = useState<PersonnelAttendanceRecord[]>([]);
   const [observationSchedules, setObservationSchedules] = useState<ObservationSchedule[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [dashboardAnnouncements, setDashboardAnnouncements] = useState<Announcement[]>([]);
+  const [announcementsLoading, setAnnouncementsLoading] = useState(true);
+  const [announcementsError, setAnnouncementsError] = useState("");
+  const [certificates, setCertificates] = useState<CertificateRecord[]>([]);
+  const [assignedRecognitionCertificates, setAssignedRecognitionCertificates] = useState<CertificateRecord[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [recognitionListOpen, setRecognitionListOpen] = useState(false);
 
   const canSeeAllDllSummary = profile?.role === "principal" || profile?.role === "master_teacher" || profile?.role === "admin" || profile?.role === "super_admin";
   const canSeeOwnDllSummary = profile?.role === "teacher" && !!profile.assignedTeacherId;
   const canSeeDllSummary = canSeeAllDllSummary || canSeeOwnDllSummary;
   const canSeeUserSummary = profile?.role === "super_admin";
+  const canSeeCertificateSummary = profile?.role === "super_admin";
   const canSeeObservationSummary = canAccessModule(profile, "observations");
+  const canSeeAnnouncements = canAccessModule(profile, "announcements");
 
   useEffect(() => subscribeAcademicSettings(setSettings), []);
   useEffect(() => subscribeUserPortalSettings(profile?.userId, setUserSettings), [profile?.userId]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!profile || !canSeeAnnouncements) {
+      setDashboardAnnouncements([]);
+      setAnnouncementsLoading(false);
+      setAnnouncementsError("");
+      return undefined;
+    }
+
+    setAnnouncementsLoading(true);
+    setAnnouncementsError("");
+    void fetchAnnouncementsPage(profile)
+      .then((page) => {
+        if (cancelled) return;
+        setDashboardAnnouncements(
+          page.announcements
+            .filter((announcement) => announcement.status === "published" && !announcement.isArchived)
+            .slice(0, 3),
+        );
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+        console.error(caught);
+        setAnnouncementsError("Announcements could not be loaded right now.");
+      })
+      .finally(() => {
+        if (!cancelled) setAnnouncementsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canSeeAnnouncements, profile]);
   useEffect(() => subscribeDllRequests(setRequests), []);
   useEffect(() => subscribeDocumentRequests(setDocumentRequests), []);
   useEffect(() => subscribeDocumentRequestSubmissions(setDocumentSubmissions), []);
@@ -307,6 +368,64 @@ export function DashboardPage() {
 
     return subscribeCollection<UserProfile>("users", setUsers);
   }, [canSeeUserSummary]);
+  useEffect(() => {
+    if (!canSeeCertificateSummary) {
+      setCertificates([]);
+      return undefined;
+    }
+
+    return subscribeCertificates(setCertificates);
+  }, [canSeeCertificateSummary]);
+  useEffect(() => {
+    if (profile?.role !== "teacher" || !profile.userId) {
+      setAssignedRecognitionCertificates([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let userParticipants: CertificateParticipant[] = [];
+    let staffParticipants: CertificateParticipant[] = [];
+
+    async function publishRecognitions() {
+      const participantMap = new Map<string, CertificateParticipant>();
+      [...userParticipants, ...staffParticipants].forEach((participant) => {
+        participantMap.set(participant.participantId, participant);
+      });
+      const certificateIds = Array.from(
+        new Set(Array.from(participantMap.values()).map((participant) => participant.certificateId).filter(Boolean)),
+      );
+      if (certificateIds.length === 0) {
+        if (!cancelled) setAssignedRecognitionCertificates([]);
+        return;
+      }
+
+      const records = await Promise.all(certificateIds.map((certificateId) => getCertificate(certificateId)));
+      if (cancelled) return;
+      setAssignedRecognitionCertificates(
+        records
+          .filter((certificate): certificate is CertificateRecord => Boolean(certificate))
+          .filter((certificate) => certificate.certificateFormat === "recognition")
+          .sort((first, second) => (second.issuedDate || second.startDate || "").localeCompare(first.issuedDate || first.startDate || "")),
+      );
+    }
+
+    const unsubscribeUser = subscribeCertificateParticipantsByUser(profile.userId, (nextParticipants) => {
+      userParticipants = nextParticipants;
+      void publishRecognitions();
+    });
+    const unsubscribeStaff = profile.assignedTeacherId
+      ? subscribeCertificateParticipantsByStaff(profile.assignedTeacherId, (nextParticipants) => {
+          staffParticipants = nextParticipants;
+          void publishRecognitions();
+        })
+      : undefined;
+
+    return () => {
+      cancelled = true;
+      unsubscribeUser();
+      unsubscribeStaff?.();
+    };
+  }, [profile?.assignedTeacherId, profile?.role, profile?.userId]);
 
   const activeAssignments = useMemo(
     () =>
@@ -322,6 +441,13 @@ export function DashboardPage() {
     () => buildTeacherLoadSummaries(teachers, loadAssignments, settings.currentSchoolYear, settings.currentTerm),
     [loadAssignments, settings.currentSchoolYear, settings.currentTerm, teachers],
   );
+
+  const recognitionCertificateCount = useMemo(
+    () => certificates.filter((certificate) => certificate.certificateFormat === "recognition").length,
+    [certificates],
+  );
+
+  const ownRecognitionCertificateCount = assignedRecognitionCertificates.length;
 
   const ownLoad = profile?.assignedTeacherId
     ? getTeacherTotalLoad(profile.assignedTeacherId, loadAssignments, settings.currentSchoolYear, settings.currentTerm)
@@ -805,6 +931,13 @@ export function DashboardPage() {
         onClick: () => document.getElementById("dashboard-needs-attention")?.scrollIntoView({ behavior: "smooth", block: "start" }),
       });
       cards.push({ label: "Current Subject", value: currentScheduleSubjectLabel, detail: nextScheduleDetail, icon: CalendarClock, isActive: ownScheduleEntries.length > 0, onClick: () => setScheduleOpen(true) });
+      cards.push({
+        label: "Certificate of Recognition",
+        value: ownRecognitionCertificateCount,
+        detail: "recognition titles",
+        icon: BadgeCheck,
+        onClick: () => setRecognitionListOpen(true),
+      });
       if (canSeeObservationSummary) {
         cards.push({ label: "My Observation", value: observationSummary.scheduled, detail: `${observationSummary.today} today`, icon: Eye, isActive: observationSummary.scheduled > 0 || observationSummary.today > 0, to: "/observations" });
       }
@@ -835,6 +968,16 @@ export function DashboardPage() {
     }
 
     cards.push({ label: "School Year", value: settings.currentSchoolYear, detail: settings.currentTerm, icon: CalendarDays, to: canAccessModule(profile, "settings") ? "/settings" : undefined });
+
+    if (canSeeCertificateSummary) {
+      cards.push({
+        label: "Certificate of Recognition",
+        value: recognitionCertificateCount,
+        detail: "recognition records",
+        icon: BadgeCheck,
+        to: "/certificates",
+      });
+    }
 
     if (canAccessModule(profile, "personnel_attendance")) {
       cards.push(
@@ -891,6 +1034,7 @@ export function DashboardPage() {
     attendanceCompletion,
     attendanceSummary,
     canSeeDllSummary,
+    canSeeCertificateSummary,
     canSeeUserSummary,
     currentScheduleSubjectLabel,
     documentSummary,
@@ -907,8 +1051,10 @@ export function DashboardPage() {
     ownAttendanceLabel,
     ownMonthlyAttendanceSummary,
     ownLoad,
+    ownRecognitionCertificateCount,
     ownScheduleEntries.length,
     profile,
+    recognitionCertificateCount,
     sectionSummary,
     settings.currentSchoolYear,
     settings.currentTerm,
@@ -939,6 +1085,73 @@ export function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {canSeeAnnouncements && (
+        <section className="mt-5 overflow-hidden rounded-2xl border border-red-100 bg-white shadow-sm shadow-slate-200/70">
+          <div className="flex flex-col justify-between gap-3 border-b border-red-100 bg-gradient-to-r from-red-50 to-white px-5 py-4 sm:flex-row sm:items-center">
+            <div className="flex items-center gap-3">
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-civic text-white shadow-sm">
+                <BellRing size={21} />
+              </span>
+              <div>
+                <h2 className="font-bold text-ink">Latest Announcements</h2>
+                <p className="mt-0.5 text-xs font-medium text-slate-500">Important updates for school personnel</p>
+              </div>
+            </div>
+            <button
+              className="inline-flex h-9 items-center justify-center rounded-xl border border-red-200 bg-white px-3 text-xs font-bold text-civic transition hover:bg-red-50"
+              onClick={() => navigate("/announcements")}
+              type="button"
+            >
+              View all announcements
+            </button>
+          </div>
+
+          {announcementsLoading ? (
+            <div className="px-5 py-6 text-sm font-medium text-slate-500">Loading announcements...</div>
+          ) : announcementsError ? (
+            <div className="px-5 py-5">
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">{announcementsError}</p>
+            </div>
+          ) : dashboardAnnouncements.length === 0 ? (
+            <div className="px-5 py-6 text-sm font-medium text-slate-500">No active announcements for you right now.</div>
+          ) : (
+            <div className="grid divide-y divide-slate-100 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+              {dashboardAnnouncements.map((announcement) => {
+                const priorityClass =
+                  announcement.priority === "urgent"
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : announcement.priority === "important"
+                      ? "border-amber-200 bg-amber-50 text-amber-700"
+                      : "border-slate-200 bg-slate-50 text-slate-600";
+
+                return (
+                  <button
+                    className="group min-w-0 p-5 text-left transition hover:bg-red-50/40"
+                    key={announcement.announcementId}
+                    onClick={() => navigate(`/announcements?announcement=${announcement.announcementId}`)}
+                    type="button"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${priorityClass}`}>
+                        {announcement.priority}
+                      </span>
+                      {announcement.isPinned && <span className="text-[10px] font-bold uppercase tracking-wide text-civic">Pinned</span>}
+                      <span className="ml-auto text-xs font-medium text-slate-400">{formatAnnouncementDate(announcement.createdAt)}</span>
+                    </div>
+                    <h3 className="mt-3 line-clamp-2 font-bold text-slate-950 transition group-hover:text-civic">{announcement.title}</h3>
+                    <p className="mt-1 line-clamp-2 text-sm text-slate-600">{announcement.message}</p>
+                    <div className="mt-3 flex items-center justify-between gap-3 text-xs font-semibold">
+                      <span className="truncate text-slate-500">{announcement.source}</span>
+                      <span className="shrink-0 text-civic">Read announcement</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {topCards.map((card) => (
@@ -1081,6 +1294,52 @@ export function DashboardPage() {
           </dl>
         </section>
       </div>
+
+      {profile?.role === "teacher" && recognitionListOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 px-4 py-8 backdrop-blur-sm">
+          <section className="w-full max-w-3xl overflow-hidden rounded-2xl border border-red-100 bg-white shadow-2xl shadow-slate-950/20">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-gradient-to-r from-wine to-civic px-5 py-4 text-white">
+              <div>
+                <h2 className="text-lg font-bold">Certificate of Recognition</h2>
+                <p className="mt-1 text-sm text-white/75">{ownRecognitionCertificateCount} recognition titles</p>
+              </div>
+              <button
+                aria-label="Close recognition list"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-white/80 hover:bg-white/10 hover:text-white"
+                onClick={() => setRecognitionListOpen(false)}
+                type="button"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto bg-slate-50/50 p-5">
+              {assignedRecognitionCertificates.length > 0 ? (
+                <div className="space-y-3">
+                  {assignedRecognitionCertificates.map((certificate) => (
+                    <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/70" key={certificate.certificateId}>
+                      <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
+                        <div>
+                          <p className="text-base font-bold text-ink">{certificate.eventTitle}</p>
+                          <p className="mt-2 text-sm leading-6 text-slate-600">
+                            {certificate.notes || "No recognition details recorded."}
+                          </p>
+                        </div>
+                        <span className="shrink-0 rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-bold text-civic">
+                          {certificate.issuedDate || certificate.startDate || "No date"}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-600">
+                  No recognition certificates assigned to your teacher account yet.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
 
       {profile?.role === "teacher" && scheduleOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/50 px-4 py-8 backdrop-blur-sm">

@@ -75,7 +75,7 @@ function escapeHtml(value: unknown) {
 }
 
 export function UsersPage() {
-  const { profile } = useAuth();
+  const { profile, user: authenticatedUser } = useAuth();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -218,6 +218,9 @@ export function UsersPage() {
     const payload: Record<string, unknown> = {};
     const normalizedPermissions = nextRole === "super_admin" ? getDefaultModulePermissions("super_admin") : nextModulePermissions;
 
+    if (user.userId !== user.id) {
+      payload.userId = user.id;
+    }
     if (forceAccessFields || user.role !== nextRole) {
       payload.role = nextRole;
     }
@@ -235,7 +238,7 @@ export function UsersPage() {
     }
     if (includeReviewFields) {
       payload.reviewedAt = serverTimestamp();
-      payload.reviewedBy = profile?.userId || deleteField();
+      payload.reviewedBy = authenticatedUser?.uid || deleteField();
     }
 
     return payload;
@@ -345,7 +348,7 @@ export function UsersPage() {
     try {
       await Promise.all(
         users
-          .filter((user) => profile?.userId !== user.userId)
+          .filter((user) => authenticatedUser?.uid !== user.id)
           .map((user) => {
             const draft = getDraft(user);
             const nextRole = draft.role;
@@ -379,7 +382,7 @@ export function UsersPage() {
   }
 
   async function deleteUserProfile(user: UserRow) {
-    if (!isSuperAdmin || profile?.userId === user.userId) return;
+    if (!isSuperAdmin || authenticatedUser?.uid === user.id) return;
 
     const password = window.prompt(`Enter the Super Admin delete password to delete ${user.fullName}'s portal user profile.`);
     if (password === null) return;
@@ -576,7 +579,7 @@ export function UsersPage() {
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {users.map((user) => {
                   const isSaving = savingUserId === user.id;
-                  const isSelf = profile?.userId === user.userId;
+                  const isSelf = authenticatedUser?.uid === user.id;
                   const draft = getDraft(user);
                   const requiredModuleIds = getRequiredModulePermissions(draft.role);
 
@@ -685,7 +688,7 @@ export function UsersPage() {
                         <p className="mt-1 text-xs text-slate-500">{getRoleLabel(draft.role)}</p>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                        {user.userId}
+                        {user.id}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">

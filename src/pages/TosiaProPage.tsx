@@ -70,6 +70,11 @@ type AssessmentSummary = {
   mmc: string;
 };
 
+type SubjectAssessmentSummary = AssessmentSummary & {
+  totalItems: number;
+  totalStudents: number;
+};
+
 type FormState = Omit<TosiaAssessment, "createdAt" | "updatedAt">;
 
 type RequestForm = {
@@ -197,6 +202,59 @@ function summarizeAssessment(assessment: Pick<TosiaAssessment, "competencies" | 
     sd: standardDeviation(correctValues),
     lmc: rankedCompetencies[0]?.content || "No mapped competency",
     mmc: rankedCompetencies[rankedCompetencies.length - 1]?.content || "No mapped competency",
+  };
+}
+
+function summarizeSubjectAssessments(assessments: TosiaAssessment[]): SubjectAssessmentSummary {
+  const competencyTotals = new Map<string, { content: string; correct: number; possible: number }>();
+  const sectionMpsValues: number[] = [];
+  let mappedItems = 0;
+  let totalCorrect = 0;
+  let totalItems = 0;
+  let totalPossible = 0;
+  let totalStudents = 0;
+
+  assessments.forEach((assessment) => {
+    const studentCount = Math.max(0, Number(assessment.totalStudents || 0));
+    const itemResponses = normalizeTosiaItemResponses(assessment.itemResponses, assessment.totalItems, studentCount);
+    const competenciesById = new Map(assessment.competencies.map((competency) => [competency.competencyId, competency]));
+    const assessmentTotalCorrect = itemResponses.reduce((sum, item) => sum + Number(item.correctResponses || 0), 0);
+    const assessmentPossible = studentCount * itemResponses.length;
+
+    totalStudents += studentCount;
+    totalItems += itemResponses.length;
+    totalCorrect += assessmentTotalCorrect;
+    totalPossible += assessmentPossible;
+    mappedItems += itemResponses.filter((item) => item.competencyId).length;
+    sectionMpsValues.push(assessmentPossible > 0 ? (assessmentTotalCorrect / assessmentPossible) * 100 : 0);
+
+    itemResponses.forEach((item) => {
+      const content = competenciesById.get(item.competencyId)?.content.trim();
+      if (!content) return;
+      const key = content.toLowerCase();
+      const current = competencyTotals.get(key) ?? { content, correct: 0, possible: 0 };
+      current.correct += Number(item.correctResponses || 0);
+      current.possible += studentCount;
+      competencyTotals.set(key, current);
+    });
+  });
+
+  const rankedCompetencies = Array.from(competencyTotals.values())
+    .map((competency) => ({
+      content: competency.content,
+      percent: competency.possible > 0 ? (competency.correct / competency.possible) * 100 : 0,
+    }))
+    .sort((first, second) => first.percent - second.percent || first.content.localeCompare(second.content));
+
+  return {
+    mappedItems,
+    mean: totalStudents > 0 ? totalCorrect / totalStudents : 0,
+    mps: totalPossible > 0 ? (totalCorrect / totalPossible) * 100 : 0,
+    sd: standardDeviation(sectionMpsValues),
+    lmc: rankedCompetencies[0]?.content || "No mapped competency",
+    mmc: rankedCompetencies[rankedCompetencies.length - 1]?.content || "No mapped competency",
+    totalItems,
+    totalStudents,
   };
 }
 
@@ -502,6 +560,61 @@ export function TosiaProPage() {
       });
     });
   }, [activeRequests, assessmentsByCardKey, assignments, isTeacherSubmitter, scopedTeacherId, sectionsById, subjectsById, teachersById]);
+
+  const selectedTeacherCard = useMemo(
+    () => teacherCards.find((card) => card.key === selectedCardKey),
+    [selectedCardKey, teacherCards],
+  );
+
+  const subjectAssignmentRows = useMemo(() => {
+    if (!selectedTeacherCard) return [];
+
+    return assignments
+      .filter(
+        (assignment) =>
+          assignment.schoolYear === selectedTeacherCard.request.schoolYear
+          && assignment.term === selectedTeacherCard.request.term
+          && assignment.subjectId === selectedTeacherCard.subject.subjectId,
+      )
+      .map((assignment) => ({
+        assignment,
+        teacher: teachersById.get(assignment.teacherId),
+        section: sectionsById.get(assignment.sectionId),
+        assessment: assessmentsByCardKey.get(
+          getTosiaClassKey(
+            selectedTeacherCard.request.requestId,
+            assignment.teacherId,
+            assignment.subjectId,
+            assignment.sectionId,
+          ),
+        ),
+      }))
+      .sort((first, second) => {
+        const teacherComparison = (first.teacher?.fullName ?? "").localeCompare(second.teacher?.fullName ?? "");
+        if (teacherComparison !== 0) return teacherComparison;
+        return (first.section?.sectionName ?? "").localeCompare(second.section?.sectionName ?? "");
+      });
+  }, [assessmentsByCardKey, assignments, sectionsById, selectedTeacherCard, teachersById]);
+
+  const submittedSubjectAssessments = useMemo(
+    () => subjectAssignmentRows.flatMap((row) => (row.assessment ? [row.assessment] : [])),
+    [subjectAssignmentRows],
+  );
+
+  const subjectSummary = useMemo(
+    () => summarizeSubjectAssessments(submittedSubjectAssessments),
+    [submittedSubjectAssessments],
+  );
+
+  const assignedSubjectTeacherCount = useMemo(
+    () => new Set(subjectAssignmentRows.map((row) => row.assignment.teacherId)).size,
+    [subjectAssignmentRows],
+  );
+
+  const submittedSubjectTeacherCount = useMemo(
+    () => new Set(submittedSubjectAssessments.map((assessment) => assessment.teacherId)).size,
+    [submittedSubjectAssessments],
+  );
 
   const canUseWorkspace = !isTeacherSubmitter || Boolean(selectedCardKey);
 
@@ -1396,6 +1509,104 @@ export function TosiaProPage() {
             </div>
           )}
         </div>
+      )}
+
+      {isTeacherSubmitter && selectedTeacherCard && (
+        <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/70">
+          <div className="flex flex-col justify-between gap-2 md:flex-row md:items-start">
+            <div>
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Subject Summary — All Assigned Teachers</h2>
+              <p className="mt-1 text-lg font-semibold text-slate-950">{selectedTeacherCard.subject.subjectName}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                {selectedTeacherCard.request.testName} · {selectedTeacherCard.request.schoolYear} · {selectedTeacherCard.request.term}
+              </p>
+            </div>
+            <span className="inline-flex w-fit rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+              Read-only collective results
+            </span>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <SummaryCard
+              detail="submitted / assigned"
+              icon={CheckCircle2}
+              label="Teachers"
+              value={`${submittedSubjectTeacherCount}/${assignedSubjectTeacherCount}`}
+            />
+            <SummaryCard
+              detail="submitted / assigned"
+              icon={ClipboardCheck}
+              label="Sections"
+              value={`${submittedSubjectAssessments.length}/${subjectAssignmentRows.length}`}
+            />
+            <SummaryCard
+              detail={`${subjectSummary.mappedItems}/${subjectSummary.totalItems} item results mapped`}
+              icon={FileText}
+              label="Students"
+              value={subjectSummary.totalStudents}
+            />
+            <SummaryCard
+              detail={`${mpsInterpretation(subjectSummary.mps).code} · SD ${round(subjectSummary.sd, 2)}`}
+              icon={BarChart3}
+              label="Subject MPS"
+              value={`${round(subjectSummary.mps, 2)}%`}
+            />
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Least Mastered Competency</p>
+              <p className="mt-1 text-sm font-semibold text-slate-950">{subjectSummary.lmc}</p>
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4">
+              <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Most Mastered Competency</p>
+              <p className="mt-1 text-sm font-semibold text-slate-950">{subjectSummary.mmc}</p>
+            </div>
+          </div>
+
+          <div className="mt-5 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Teacher</th>
+                  <th className="px-4 py-3 font-semibold">Section</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 font-semibold">Students</th>
+                  <th className="px-4 py-3 font-semibold">MPS</th>
+                  <th className="px-4 py-3 font-semibold">VI</th>
+                  <th className="px-4 py-3 font-semibold">Least Mastered</th>
+                  <th className="px-4 py-3 font-semibold">Most Mastered</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {subjectAssignmentRows.map((row) => {
+                  const rowSummary = row.assessment ? summarizeAssessment(row.assessment) : undefined;
+                  const interpretation = rowSummary ? mpsInterpretation(rowSummary.mps) : undefined;
+
+                  return (
+                    <tr key={row.assignment.assignmentId}>
+                      <td className="px-4 py-3 font-medium text-slate-950">{row.teacher?.fullName ?? row.assessment?.teacherName ?? "Unknown teacher"}</td>
+                      <td className="px-4 py-3">{row.section?.sectionName ?? row.assessment?.sectionName ?? "Unknown section"}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${row.assessment ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                          {row.assessment ? "Submitted" : "Pending"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">{row.assessment?.totalStudents ?? "—"}</td>
+                      <td className="px-4 py-3 font-semibold text-slate-950">{rowSummary ? `${round(rowSummary.mps, 2)}%` : "—"}</td>
+                      <td className="px-4 py-3" title={interpretation?.label}>{interpretation?.code ?? "—"}</td>
+                      <td className="px-4 py-3">{rowSummary?.lmc ?? "—"}</td>
+                      <td className="px-4 py-3">{rowSummary?.mmc ?? "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {subjectAssignmentRows.length === 0 && (
+              <div className="p-5 text-sm text-slate-600">No teacher assignments were found for this subject.</div>
+            )}
+          </div>
+        </section>
       )}
 
       {canUseWorkspace && (

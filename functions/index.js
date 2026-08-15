@@ -1,4 +1,5 @@
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { HttpsError, onCall } = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 
@@ -41,6 +42,17 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function announcementForCallable(snapshot) {
+  const data = snapshot.data();
+  const { createdAt, updatedAt, ...announcement } = data;
+  return {
+    ...announcement,
+    announcementId: snapshot.id,
+    createdAtMillis: createdAt?.toMillis?.() ?? null,
+    updatedAtMillis: updatedAt?.toMillis?.() ?? null,
+  };
+}
+
 function statusChanged(event) {
   const before = event.data.before.data();
   const after = event.data.after.data();
@@ -72,6 +84,51 @@ async function getTeacherUserIds() {
     .filter((user) => ["teacher", "master_teacher"].includes(user.role))
     .map((user) => user.userId);
 }
+
+exports.listVisibleAnnouncements = onCall(async (request) => {
+  const userId = request.auth?.uid;
+  if (!userId) {
+    throw new HttpsError("unauthenticated", "Sign in to view announcements.");
+  }
+
+  const profileSnapshot = await admin.firestore().collection("users").doc(userId).get();
+  const profile = profileSnapshot.data();
+  if (!profileSnapshot.exists || profile?.status !== "approved") {
+    throw new HttpsError("permission-denied", "Your portal account is not approved.");
+  }
+
+  const canManageAll = ["super_admin", "admin"].includes(profile.role);
+  let announcementsQuery = admin
+    .firestore()
+    .collection("announcements")
+    .where("status", "==", "published");
+
+  if (!canManageAll) {
+    announcementsQuery = announcementsQuery.where("authorizedUserIds", "array-contains", userId);
+  }
+
+  announcementsQuery = announcementsQuery
+    .orderBy("sortRank", "desc")
+    .orderBy("createdAt", "desc");
+
+  const cursorId = stringValue(request.data?.cursorId);
+  if (cursorId) {
+    const cursorSnapshot = await admin.firestore().collection("announcements").doc(cursorId).get();
+    if (!cursorSnapshot.exists) {
+      throw new HttpsError("invalid-argument", "The announcement page cursor is no longer available.");
+    }
+    announcementsQuery = announcementsQuery.startAfter(cursorSnapshot);
+  }
+
+  const pageSize = 20;
+  const snapshot = await announcementsQuery.limit(pageSize + 1).get();
+  const pageDocuments = snapshot.docs.slice(0, pageSize);
+  return {
+    announcements: pageDocuments.map(announcementForCallable),
+    cursorId: pageDocuments[pageDocuments.length - 1]?.id ?? null,
+    hasMore: snapshot.docs.length > pageSize,
+  };
+});
 
 async function createPortalNotifications(userIds, notification) {
   const recipientIds = unique(userIds).filter((userId) => userId !== notification.createdBy);
@@ -243,6 +300,30 @@ exports.notifyDocumentRequestCreated = onDocumentCreated(
 
     logger.info("Document request notifications created.", {
       requestId: event.params.requestId,
+      count,
+    });
+  },
+);
+
+exports.notifyAnnouncementPublished = onDocumentUpdated(
+  "announcements/{announcementId}",
+  async (event) => {
+    const before = event.data.before.data();
+    const announcement = event.data.after.data();
+    if (before?.status === "published" || announcement?.status !== "published") {
+      return;
+    }
+
+    const count = await createPortalNotifications(announcement.targetUserIds || [], {
+      title: `New announcement: ${stringValue(announcement.title, "School announcement")}`,
+      body: `${stringValue(announcement.source, "MSHS Portal")}: ${stringValue(announcement.message, "Open the announcement to view details.")}`.slice(0, 240),
+      href: `/announcements?announcement=${event.params.announcementId}`,
+      createdBy: announcement.postedByUid,
+      creatorName: announcement.postedByName,
+    });
+
+    logger.info("Announcement notifications created.", {
+      announcementId: event.params.announcementId,
       count,
     });
   },

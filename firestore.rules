@@ -36,6 +36,11 @@ service cloud.firestore {
         && currentProfile().data.role in ["super_admin", "admin", "principal", "master_teacher"];
     }
 
+    function canManageDllRequests() {
+      return isApprovedUser()
+        && currentProfile().data.role in ["super_admin", "master_teacher"];
+    }
+
     function isMpsReviewer() {
       return isApprovedUser()
         && currentProfile().data.role in ["super_admin", "principal", "master_teacher"];
@@ -57,20 +62,22 @@ service cloud.firestore {
 
     function canSubmitGradeForAssignment(data) {
       let assignment = get(/databases/$(database)/documents/loadAssignments/$(data.assignmentId)).data;
-      let classEnrollment = get(/databases/$(database)/documents/classEnrollments/$(data.classEnrollmentId)).data;
       return canSubmitForTeacher(data.teacherId)
         && assignment.teacherId == data.teacherId
         && assignment.schoolYear == data.schoolYear
         && assignment.term == data.term
         && assignment.subjectId == data.subjectId
-        && assignment.sectionId == data.sectionId
-        && classEnrollment.enrollmentId == data.enrollmentId
-        && classEnrollment.teacherId == data.teacherId
-        && classEnrollment.schoolYear == data.schoolYear
-        && classEnrollment.term == data.term
-        && classEnrollment.subjectId == data.subjectId
-        && classEnrollment.sectionId == data.sectionId
-        && classEnrollment.lrn == data.lrn;
+        && assignment.sectionId == data.sectionId;
+    }
+
+    function canSubmitGradeSettingsForAssignment(data) {
+      let assignment = get(/databases/$(database)/documents/loadAssignments/$(data.assignmentId)).data;
+      return canSubmitForTeacher(data.teacherId)
+        && assignment.teacherId == data.teacherId
+        && assignment.schoolYear == data.schoolYear
+        && assignment.term == data.term
+        && assignment.subjectId == data.subjectId
+        && assignment.sectionId == data.sectionId;
     }
 
     function canViewGradeSummary(data) {
@@ -106,6 +113,23 @@ service cloud.firestore {
         && (
           currentProfile().data.role == "super_admin"
           || currentProfile().data.modulePermissions.hasAny(["document_requests"])
+        );
+    }
+
+    function isAnnouncementManager() {
+      return isApprovedUser()
+        && currentProfile().data.role in ["super_admin", "admin"];
+    }
+
+    function canReadAnnouncementData(data) {
+      return isApprovedUser()
+        && (
+          isAnnouncementManager()
+          || data.postedByUid == request.auth.uid
+          || (
+            data.authorizedUserIds is list
+            && request.auth.uid in data.authorizedUserIds
+          )
         );
     }
  
@@ -330,9 +354,10 @@ service cloud.firestore {
 
     function validModulePermissions() {
       return request.resource.data.modulePermissions is list
-        && request.resource.data.modulePermissions.size() <= 27
+        && request.resource.data.modulePermissions.size() <= 29
         && request.resource.data.modulePermissions.hasOnly([
           "dashboard",
+          "announcements",
           "loading",
           "teachers",
           "subjects",
@@ -345,6 +370,7 @@ service cloud.firestore {
           "document_requests",
           "tosia_pro",
           "mps",
+          "grade_computation",
           "grade_submissions",
           "grade_summary",
           "observations",
@@ -359,6 +385,419 @@ service cloud.firestore {
           "settings",
           "backup_restore",
           "users"
+        ]);
+    }
+
+    function validAnnouncementSort(data) {
+      return (
+          data.isPinned == false
+          && (
+            (data.priority == "normal" && data.sortRank == 1)
+            || (data.priority == "important" && data.sortRank == 2)
+            || (data.priority == "urgent" && data.sortRank == 3)
+          )
+        ) || (
+          data.isPinned == true
+          && (
+            (data.priority == "normal" && data.sortRank == 11)
+            || (data.priority == "important" && data.sortRank == 12)
+            || (data.priority == "urgent" && data.sortRank == 13)
+          )
+        );
+    }
+
+    function validAnnouncementBase(announcementId) {
+      return request.resource.data.keys().hasOnly([
+          "announcementId",
+          "title",
+          "source",
+          "message",
+          "audienceType",
+          "audienceIds",
+          "audienceNames",
+          "targetUserIds",
+          "authorizedUserIds",
+          "category",
+          "priority",
+          "postedByUid",
+          "postedByName",
+          "status",
+          "sortRank",
+          "isPinned",
+          "isArchived",
+          "requireAcknowledgment",
+          "attachments",
+          "createdAt",
+          "updatedAt"
+        ])
+        && request.resource.data.announcementId == announcementId
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 300
+        && request.resource.data.source is string
+        && request.resource.data.source.size() > 0
+        && request.resource.data.source.size() <= 300
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 20000
+        && request.resource.data.audienceType in [
+          "all_personnel",
+          "teaching_personnel",
+          "non_teaching_personnel",
+          "department",
+          "grade_level",
+          "selected_personnel",
+          "selected_group"
+        ]
+        && request.resource.data.audienceIds is list
+        && request.resource.data.audienceIds.size() <= 1000
+        && request.resource.data.audienceNames is list
+        && request.resource.data.audienceNames.size() > 0
+        && request.resource.data.audienceNames.size() <= 1000
+        && request.resource.data.targetUserIds is list
+        && request.resource.data.targetUserIds.size() <= 1000
+        && request.resource.data.authorizedUserIds is list
+        && request.resource.data.authorizedUserIds.size() > 0
+        && request.resource.data.authorizedUserIds.size() <= 1001
+        && request.resource.data.authorizedUserIds.hasAny([request.resource.data.postedByUid])
+        && request.resource.data.authorizedUserIds.hasAll(request.resource.data.targetUserIds)
+        && request.resource.data.authorizedUserIds.size() <= request.resource.data.targetUserIds.size() + 1
+        && request.resource.data.category in [
+          "memorandum",
+          "advisory",
+          "meeting",
+          "activity_event",
+          "deadline_submission",
+          "information",
+          "other"
+        ]
+        && request.resource.data.priority in ["normal", "important", "urgent"]
+        && request.resource.data.postedByUid is string
+        && request.resource.data.postedByName is string
+        && request.resource.data.status in ["draft", "published"]
+        && request.resource.data.isPinned is bool
+        && request.resource.data.isArchived is bool
+        && request.resource.data.requireAcknowledgment is bool
+        && request.resource.data.attachments is list
+        && request.resource.data.attachments.size() <= 20
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && validAnnouncementSort(request.resource.data)
+        && (
+          request.resource.data.status == "draft"
+          || request.resource.data.targetUserIds.size() > 0
+        );
+    }
+
+    function validAnnouncementCreate(announcementId) {
+      return isApprovedUser()
+        && validAnnouncementBase(announcementId)
+        && request.resource.data.postedByUid == request.auth.uid
+        && request.resource.data.postedByName == currentProfile().data.fullName
+        && request.resource.data.status == "draft"
+        && request.resource.data.isPinned == false
+        && request.resource.data.isArchived == false
+        && request.resource.data.attachments.size() == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validAnnouncementOwnerUpdate(announcementId) {
+      return validAnnouncementBase(announcementId)
+        && resource.data.postedByUid == request.auth.uid
+        && request.resource.data.postedByUid == resource.data.postedByUid
+        && request.resource.data.postedByName == resource.data.postedByName
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.isPinned == resource.data.isPinned
+        && request.resource.data.status == "published"
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validAnnouncementManagerUpdate(announcementId) {
+      return validAnnouncementBase(announcementId)
+        && request.resource.data.postedByUid == resource.data.postedByUid
+        && request.resource.data.postedByName == resource.data.postedByName
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.status == "published"
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function announcementForRead(data) {
+      return get(/databases/$(database)/documents/announcements/$(data.announcementId));
+    }
+
+    function canReadAnnouncementRead(data) {
+      let announcement = announcementForRead(data);
+      return isApprovedUser()
+        && (
+          data.userId == request.auth.uid
+          || isAnnouncementManager()
+          || announcement.data.postedByUid == request.auth.uid
+        );
+    }
+
+    function validAnnouncementReadCreate(readId) {
+      let announcement = announcementForRead(request.resource.data);
+      return isApprovedUser()
+        && request.resource.data.keys().hasAll([
+          "readId",
+          "announcementId",
+          "userId",
+          "userName",
+          "firstReadAt"
+        ])
+        && request.resource.data.keys().hasOnly([
+          "readId",
+          "announcementId",
+          "userId",
+          "userName",
+          "firstReadAt",
+          "acknowledgedAt"
+        ])
+        && request.resource.data.readId == readId
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userName == currentProfile().data.fullName
+        && readId == request.resource.data.announcementId + "_" + request.auth.uid
+        && announcement.data.status == "published"
+        && announcement.data.targetUserIds.hasAny([request.auth.uid])
+        && request.resource.data.firstReadAt == request.time
+        && (
+          !request.resource.data.keys().hasAny(["acknowledgedAt"])
+          || (
+            announcement.data.requireAcknowledgment == true
+            && request.resource.data.acknowledgedAt == request.time
+          )
+        );
+    }
+
+    function validAnnouncementReadUpdate() {
+      let announcement = announcementForRead(resource.data);
+      return isApprovedUser()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["acknowledgedAt"])
+        && announcement.data.requireAcknowledgment == true
+        && announcement.data.targetUserIds.hasAny([request.auth.uid])
+        && request.resource.data.acknowledgedAt == request.time;
+    }
+
+    function validGradeComputationWeights() {
+      return request.resource.data.weights is map
+        && request.resource.data.weights.keys().hasOnly(["written", "performance", "exam"])
+        && request.resource.data.weights.written is number
+        && request.resource.data.weights.performance is number
+        && request.resource.data.weights.exam is number
+        && request.resource.data.weights.written >= 0
+        && request.resource.data.weights.performance >= 0
+        && request.resource.data.weights.exam >= 0
+        && request.resource.data.weights.written + request.resource.data.weights.performance + request.resource.data.weights.exam == 100;
+    }
+
+    function validGradeComputationWrittenScores(scores, requirePositive, requireAll) {
+      return scores is map
+        && scores.keys().hasOnly(["ww1", "ww2", "ww3", "ww4", "ww5"])
+        && (requireAll ? scores.keys().hasAll(["ww1", "ww2", "ww3", "ww4", "ww5"]) : scores.keys().hasAny(["ww1", "ww2", "ww3", "ww4", "ww5"]))
+        && (!scores.keys().hasAny(["ww1"]) || (scores.ww1 is number && (requirePositive ? scores.ww1 > 0 : scores.ww1 >= 0)))
+        && (!scores.keys().hasAny(["ww2"]) || (scores.ww2 is number && (requirePositive ? scores.ww2 > 0 : scores.ww2 >= 0)))
+        && (!scores.keys().hasAny(["ww3"]) || (scores.ww3 is number && (requirePositive ? scores.ww3 > 0 : scores.ww3 >= 0)))
+        && (!scores.keys().hasAny(["ww4"]) || (scores.ww4 is number && (requirePositive ? scores.ww4 > 0 : scores.ww4 >= 0)))
+        && (!scores.keys().hasAny(["ww5"]) || (scores.ww5 is number && (requirePositive ? scores.ww5 > 0 : scores.ww5 >= 0)));
+    }
+
+    function validGradeComputationPerformanceScores(scores, requirePositive, requireAll) {
+      return scores is map
+        && scores.keys().hasOnly(["pt1", "pt2", "pt3"])
+        && (requireAll ? scores.keys().hasAll(["pt1", "pt2", "pt3"]) : scores.keys().hasAny(["pt1", "pt2", "pt3"]))
+        && (!scores.keys().hasAny(["pt1"]) || (scores.pt1 is number && (requirePositive ? scores.pt1 > 0 : scores.pt1 >= 0)))
+        && (!scores.keys().hasAny(["pt2"]) || (scores.pt2 is number && (requirePositive ? scores.pt2 > 0 : scores.pt2 >= 0)))
+        && (!scores.keys().hasAny(["pt3"]) || (scores.pt3 is number && (requirePositive ? scores.pt3 > 0 : scores.pt3 >= 0)));
+    }
+
+    function validGradeComputationExamScores(scores, requirePositive, requireAll) {
+      return scores is map
+        && scores.keys().hasOnly(["s1", "s2", "tt"])
+        && (requireAll ? scores.keys().hasAll(["s1", "s2", "tt"]) : scores.keys().hasAny(["s1", "s2", "tt"]))
+        && (!scores.keys().hasAny(["s1"]) || (scores.s1 is number && (requirePositive ? scores.s1 > 0 : scores.s1 >= 0)))
+        && (!scores.keys().hasAny(["s2"]) || (scores.s2 is number && (requirePositive ? scores.s2 > 0 : scores.s2 >= 0)))
+        && (!scores.keys().hasAny(["tt"]) || (scores.tt is number && (requirePositive ? scores.tt > 0 : scores.tt >= 0)));
+    }
+
+    function validGradeComputationHighestScores() {
+      return request.resource.data.highestScores is map
+        && request.resource.data.highestScores.keys().hasOnly(["written", "performance", "exam"])
+        && validGradeComputationWrittenScores(request.resource.data.highestScores.written, true, true)
+        && validGradeComputationPerformanceScores(request.resource.data.highestScores.performance, true, true)
+        && validGradeComputationExamScores(request.resource.data.highestScores.exam, true, true);
+    }
+
+    function validGradeComputationComponent(component) {
+      return component is map
+        && component.keys().hasOnly(["score", "maxScore", "percentageScore", "weightedScore", "itemScores"])
+        && component.score is number
+        && component.maxScore is number
+        && component.percentageScore is number
+        && component.weightedScore is number
+        && component.score >= 0
+        && component.maxScore > 0
+        && component.percentageScore >= 0
+        && component.weightedScore >= 0;
+    }
+
+    function validGradeComputationItemScores() {
+      return validGradeComputationWrittenScores(request.resource.data.written.itemScores, false, false)
+        && validGradeComputationPerformanceScores(request.resource.data.performance.itemScores, false, false)
+        && validGradeComputationExamScores(request.resource.data.exam.itemScores, false, false);
+    }
+
+    function validGradeComputationBase(computationId) {
+      return request.resource.data.computationId == computationId
+        && computationId == request.resource.data.assignmentId + "__" + request.resource.data.enrollmentId
+        && request.resource.data.assignmentId is string
+        && request.resource.data.classEnrollmentId is string
+        && request.resource.data.enrollmentId is string
+        && request.resource.data.lrn is string
+        && request.resource.data.studentName is string
+        && request.resource.data.schoolYear is string
+        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
+        && request.resource.data.teacherId is string
+        && request.resource.data.teacherName is string
+        && request.resource.data.subjectId is string
+        && request.resource.data.subjectCode is string
+        && request.resource.data.subjectName is string
+        && request.resource.data.sectionId is string
+        && request.resource.data.sectionName is string
+        && request.resource.data.gradeLevel is string
+        && request.resource.data.strand is string
+        && validGradeComputationWeights()
+        && validGradeComputationHighestScores()
+        && validGradeComputationComponent(request.resource.data.written)
+        && validGradeComputationComponent(request.resource.data.performance)
+        && validGradeComputationComponent(request.resource.data.exam)
+        && validGradeComputationItemScores()
+        && request.resource.data.initialGrade is number
+        && request.resource.data.initialGrade >= 0
+        && request.resource.data.initialGrade <= 100
+        && request.resource.data.finalGrade is number
+        && request.resource.data.finalGrade >= 0
+        && request.resource.data.finalGrade <= 100
+        && request.resource.data.submittedBy == request.auth.uid
+        && canSubmitGradeForAssignment(request.resource.data)
+        && request.resource.data.keys().hasOnly([
+          "computationId",
+          "assignmentId",
+          "classEnrollmentId",
+          "enrollmentId",
+          "lrn",
+          "studentName",
+          "schoolYear",
+          "term",
+          "teacherId",
+          "teacherName",
+          "subjectId",
+          "subjectCode",
+          "subjectName",
+          "sectionId",
+          "sectionName",
+          "gradeLevel",
+          "strand",
+          "weights",
+          "highestScores",
+          "written",
+          "performance",
+          "exam",
+          "initialGrade",
+          "finalGrade",
+          "submittedBy",
+          "submittedAt",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validGradeComputationCreate(computationId) {
+      return validGradeComputationBase(computationId)
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validGradeComputationUpdate(computationId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return validGradeComputationBase(computationId)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.submittedAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "studentName",
+          "teacherName",
+          "subjectCode",
+          "subjectName",
+          "sectionName",
+          "gradeLevel",
+          "strand",
+          "weights",
+          "highestScores",
+          "written",
+          "performance",
+          "exam",
+          "initialGrade",
+          "finalGrade",
+          "submittedBy",
+          "submittedAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validGradeComputationSettingsBase(settingsId) {
+      return request.resource.data.settingsId == settingsId
+        && request.resource.data.assignmentId == settingsId
+        && request.resource.data.schoolYear is string
+        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
+        && request.resource.data.teacherId is string
+        && request.resource.data.subjectId is string
+        && request.resource.data.sectionId is string
+        && validGradeComputationWeights()
+        && validGradeComputationHighestScores()
+        && request.resource.data.submittedBy == request.auth.uid
+        && canSubmitGradeSettingsForAssignment(request.resource.data)
+        && request.resource.data.keys().hasOnly([
+          "settingsId",
+          "assignmentId",
+          "schoolYear",
+          "term",
+          "teacherId",
+          "subjectId",
+          "sectionId",
+          "weights",
+          "highestScores",
+          "submittedBy",
+          "createdAt",
+          "updatedAt"
+        ]);
+    }
+
+    function validGradeComputationSettingsCreate(settingsId) {
+      return validGradeComputationSettingsBase(settingsId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function validGradeComputationSettingsUpdate(settingsId) {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      return validGradeComputationSettingsBase(settingsId)
+        && request.resource.data.settingsId == resource.data.settingsId
+        && request.resource.data.assignmentId == resource.data.assignmentId
+        && request.resource.data.schoolYear == resource.data.schoolYear
+        && request.resource.data.term == resource.data.term
+        && request.resource.data.teacherId == resource.data.teacherId
+        && request.resource.data.subjectId == resource.data.subjectId
+        && request.resource.data.sectionId == resource.data.sectionId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && changedKeys.hasOnly([
+          "weights",
+          "highestScores",
+          "submittedBy",
+          "updatedAt"
         ]);
     }
 
@@ -856,6 +1295,7 @@ service cloud.firestore {
         && changedKeys.hasOnly([
           "role",
           "status",
+          "userId",
           "modulePermissions",
           "assignedTeacherId",
           "advisingSectionId",
@@ -1008,6 +1448,21 @@ service cloud.firestore {
         && request.resource.data.staffName is string
         && request.resource.data.roleOrPosition is string
         && request.resource.data.status in ["present", "absent", "official_business"]
+        && (
+          (
+            request.resource.data.status == "absent"
+            && request.resource.data.absenceCreditType in [
+              "specialOrderServiceCredit",
+              "localServiceCredit",
+              "wellnessBreak",
+              "leaveCredits"
+            ]
+          )
+          || (
+            request.resource.data.status != "absent"
+            && !request.resource.data.keys().hasAny(["absenceCreditType"])
+          )
+        )
         && request.resource.data.remarks is string
         && validOptionalString("timeIn")
         && validOptionalString("timeOut")
@@ -1023,6 +1478,7 @@ service cloud.firestore {
           "staffName",
           "roleOrPosition",
           "status",
+          "absenceCreditType",
           "timeIn",
           "timeOut",
           "remarks",
@@ -1030,6 +1486,52 @@ service cloud.firestore {
           "recorderName",
           "createdAt",
           "updatedAt"
+        ]);
+    }
+
+    function validPersonnelCreditLog(logId) {
+      return request.resource.data.logId == logId
+        && request.resource.data.staffId is string
+        && request.resource.data.staffName is string
+        && request.resource.data.staffType in ["teaching", "non_teaching"]
+        && request.resource.data.roleOrPosition is string
+        && request.resource.data.creditType in [
+          "specialOrderServiceCredit",
+          "localServiceCredit",
+          "wellnessBreak",
+          "leaveCredits"
+        ]
+        && request.resource.data.source in [
+          "manual_adjustment",
+          "absence_deduction",
+          "absence_refund"
+        ]
+        && request.resource.data.amount is number
+        && request.resource.data.previousBalance is number
+        && request.resource.data.newBalance is number
+        && validOptionalString("attendanceId")
+        && validOptionalString("attendanceDate")
+        && request.resource.data.remarks is string
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.creatorName is string
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly([
+          "logId",
+          "staffId",
+          "staffName",
+          "staffType",
+          "roleOrPosition",
+          "creditType",
+          "source",
+          "amount",
+          "previousBalance",
+          "newBalance",
+          "attendanceId",
+          "attendanceDate",
+          "remarks",
+          "createdBy",
+          "creatorName",
+          "createdAt"
         ]);
     }
 
@@ -1261,8 +1763,8 @@ service cloud.firestore {
 
     match /dllRequests/{requestId} {
       allow read: if isApprovedUser();
-      allow create: if isSuperAdmin() && validDllRequestCreate(requestId);
-      allow update: if isSuperAdmin() && validDllRequestUpdate(requestId);
+      allow create: if canManageDllRequests() && validDllRequestCreate(requestId);
+      allow update: if canManageDllRequests() && validDllRequestUpdate(requestId);
       allow delete: if isSuperAdmin();
     }
 
@@ -1363,6 +1865,28 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
+    match /gradeComputations/{computationId} {
+      allow read: if canSubmitForTeacher(resource.data.teacherId)
+        || canViewGradeSummary(resource.data);
+      allow create: if canSubmitForTeacher(request.resource.data.teacherId)
+        && validGradeComputationCreate(computationId);
+      allow update: if canSubmitForTeacher(resource.data.teacherId)
+        && canSubmitForTeacher(request.resource.data.teacherId)
+        && validGradeComputationUpdate(computationId);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /gradeComputationSettings/{settingsId} {
+      allow read: if canSubmitForTeacher(resource.data.teacherId)
+        || canViewGradeSummary(resource.data);
+      allow create: if canSubmitForTeacher(request.resource.data.teacherId)
+        && validGradeComputationSettingsCreate(settingsId);
+      allow update: if canSubmitForTeacher(resource.data.teacherId)
+        && canSubmitForTeacher(request.resource.data.teacherId)
+        && validGradeComputationSettingsUpdate(settingsId);
+      allow delete: if isSuperAdmin();
+    }
+
     match /observationSchedules/{observationId} {
       allow read: if isObservationReviewer()
         || (
@@ -1376,6 +1900,38 @@ service cloud.firestore {
         && (resource.data.observerId == request.auth.uid || isSuperAdmin())
         && validObservationScheduleUpdate(observationId);
       allow delete: if isSuperAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if canReadAnnouncementData(resource.data);
+      allow create: if validAnnouncementCreate(announcementId);
+      allow update: if (
+          resource.data.postedByUid == request.auth.uid
+          && validAnnouncementOwnerUpdate(announcementId)
+        ) || (
+          isAnnouncementManager()
+          && validAnnouncementManagerUpdate(announcementId)
+        );
+      allow delete: if isAnnouncementManager()
+        || (
+          isApprovedUser()
+          && resource.data.postedByUid == request.auth.uid
+          && resource.data.status == "draft"
+        );
+    }
+
+    match /announcementReads/{readId} {
+      allow get: if canReadAnnouncementRead(resource.data);
+      allow list: if isApprovedUser()
+        && resource.data.userId == request.auth.uid;
+      allow list: if isAnnouncementManager()
+        || (
+          isApprovedUser()
+          && announcementForRead(resource.data).data.postedByUid == request.auth.uid
+        );
+      allow create: if validAnnouncementReadCreate(readId);
+      allow update: if validAnnouncementReadUpdate();
+      allow delete: if isAnnouncementManager();
     }
 
     match /personnelAttendance/{attendanceId} {
@@ -1404,6 +1960,13 @@ service cloud.firestore {
       allow create, update: if canManagePersonnelAttendance()
         && validPersonnelCreditBalance(creditId);
       allow delete: if isSuperAdmin();
+    }
+
+    match /personnelCreditLogs/{logId} {
+      allow read: if canManagePersonnelAttendance();
+      allow create: if canManagePersonnelAttendance()
+        && validPersonnelCreditLog(logId);
+      allow update, delete: if false;
     }
 
     match /enrollmentStudents/{enrollmentId} {

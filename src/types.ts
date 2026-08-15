@@ -10,6 +10,7 @@ export type UserRole =
 export type UserStatus = "approved" | "pending" | "disabled";
 export type AppModule =
   | "dashboard"
+  | "announcements"
   | "loading"
   | "teachers"
   | "subjects"
@@ -22,6 +23,7 @@ export type AppModule =
   | "document_requests"
   | "tosia_pro"
   | "mps"
+  | "grade_computation"
   | "grade_submissions"
   | "grade_summary"
   | "observations"
@@ -49,8 +51,8 @@ export type UserProfile = {
   createdAt: unknown;
 };
 
-export type CertificateEventType = "LAC Session" | "Training" | "Seminar";
-export type CertificateFormat = "certification" | "participation";
+export type CertificateEventType = string;
+export type CertificateFormat = "certification" | "participation" | "recognition";
 export type CertificationType = "standard" | "esat";
 export type CertificateStatus = "valid" | "revoked";
 export type CertificatePersonType = "speaker_facilitator" | "technical_working_group";

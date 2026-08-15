@@ -6,7 +6,13 @@ import {
   getPublicCertificate,
   getPublicCertificateParticipant,
 } from "../services/certificateService";
-import type { CertificateParticipant, CertificateRecord } from "../types";
+import type { CertificateFormat, CertificateParticipant, CertificateRecord } from "../types";
+
+const certificateFormatLabels: Record<CertificateFormat, string> = {
+  certification: "CERTIFICATION",
+  participation: "Certificate of Participation",
+  recognition: "Certificate of Recognition",
+};
 
 function formatDate(value: string) {
   if (!value) return "Not specified";
@@ -93,6 +99,7 @@ export function CertificateVerificationPage() {
   const publicRecord = certificate?.publicAccess && participant?.publicAccess;
   const isValid = publicRecord && certificate?.status === "valid" && participant?.status === "valid";
   const isRevoked = certificate?.status === "revoked" || participant?.status === "revoked";
+  const certificateFormat = certificate?.certificateFormat ?? "participation";
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(242,184,30,0.18),transparent_28%),linear-gradient(135deg,#fff8f8_0%,#f6f7fb_48%,#fff4d8_100%)] px-5 py-8">
@@ -171,7 +178,7 @@ export function CertificateVerificationPage() {
                   </div>
                 </div>
 
-                <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_220px]">
+                <div className={certificateFormat === "recognition" ? "mb-6 grid gap-4" : "mb-6 grid gap-4 lg:grid-cols-[1fr_220px]"}>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                     <div className="flex items-start gap-3">
                       <Award className="mt-1 shrink-0 text-civic" size={24} />
@@ -185,23 +192,28 @@ export function CertificateVerificationPage() {
                         <p className="mt-2 text-sm font-medium text-slate-600">
                           {[participant.participantRole, participant.participantOffice].filter(Boolean).join(" - ")}
                         </p>
+                        <p className="mt-2 text-sm font-bold text-civic">
+                          {certificateFormatLabels[certificateFormat]}
+                        </p>
                       </div>
                     </div>
                   </div>
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
-                    <div className="flex items-center gap-3">
-                      <Clock size={24} />
-                      <div>
-                        <p className="text-xs font-bold uppercase tracking-wide">Hours attended</p>
-                        <p className="mt-1 text-3xl font-black">{Number(participant.hoursAttended || 0)}</p>
+                  {certificateFormat !== "recognition" && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
+                      <div className="flex items-center gap-3">
+                        <Clock size={24} />
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wide">Hours attended</p>
+                          <p className="mt-1 text-3xl font-black">{Number(participant.hoursAttended || 0)}</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <DetailItem label="Activity" value={certificate.eventTitle} />
-                  <DetailItem label="Activity type" value={certificate.eventType} />
+                  <DetailItem label={certificateFormat === "recognition" ? "Recognition" : "Activity"} value={certificate.eventTitle} />
+                  <DetailItem label="Format" value={certificateFormatLabels[certificateFormat]} />
                   <DetailItem label="Activity date" value={getDateRange(certificate)} />
                   <DetailItem label="Venue" value={certificate.venue} />
                   <DetailItem label="Date issued" value={formatDate(certificate.issuedDate)} />

@@ -87,24 +87,84 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .portal-theme-dark {
   color-scheme: dark;
+  background-color: #0f172a;
+  color: #e2e8f0;
 }
 
 .portal-theme-dark.bg-mist,
 .portal-theme-dark .bg-mist,
+.portal-theme-dark .bg-slate-950,
+.portal-theme-dark .bg-slate-900,
+.portal-theme-dark .bg-slate-800,
 .portal-theme-dark .bg-slate-50,
 .portal-theme-dark .bg-slate-100,
-.portal-theme-dark .hover\:bg-slate-50:hover {
+.portal-theme-dark .bg-slate-50\/50,
+.portal-theme-dark .hover\:bg-slate-50:hover,
+.portal-theme-dark .hover\:bg-slate-50\/30:hover {
   background-color: #0f172a !important;
 }
 
 .portal-theme-dark .bg-white,
 .portal-theme-dark .bg-white\/90,
 .portal-theme-dark .bg-white\/95,
-.portal-theme-dark .bg-red-50,
-.portal-theme-dark .bg-blue-50,
-.portal-theme-dark .bg-emerald-50,
-.portal-theme-dark .bg-amber-50 {
+.portal-theme-dark .bg-white\/70,
+.portal-theme-dark .bg-slate-200,
+.portal-theme-dark .bg-slate-300 {
   background-color: #172033 !important;
+}
+
+.portal-theme-dark .bg-red-50,
+.portal-theme-dark .bg-red-50\/30,
+.portal-theme-dark .bg-red-50\/40,
+.portal-theme-dark .bg-red-50\/60,
+.portal-theme-dark .bg-red-100,
+.portal-theme-dark .hover\:bg-red-50:hover,
+.portal-theme-dark .hover\:bg-red-50\/30:hover,
+.portal-theme-dark .hover\:bg-red-50\/40:hover,
+.portal-theme-dark .hover\:bg-red-100:hover {
+  background-color: #3a1721 !important;
+}
+
+.portal-theme-dark .bg-blue-50,
+.portal-theme-dark .bg-blue-100,
+.portal-theme-dark .bg-emerald-50,
+.portal-theme-dark .bg-emerald-100,
+.portal-theme-dark .bg-green-50,
+.portal-theme-dark .bg-green-100,
+.portal-theme-dark .bg-amber-50,
+.portal-theme-dark .bg-amber-100,
+.portal-theme-dark .bg-yellow-50,
+.portal-theme-dark .bg-yellow-100 {
+  background-color: #172033 !important;
+}
+
+.portal-theme-dark .bg-blue-50,
+.portal-theme-dark .bg-blue-100,
+.portal-theme-dark .hover\:bg-blue-50:hover,
+.portal-theme-dark .hover\:bg-blue-100:hover {
+  background-color: #13243f !important;
+}
+
+.portal-theme-dark .bg-emerald-50,
+.portal-theme-dark .bg-emerald-100,
+.portal-theme-dark .bg-green-50,
+.portal-theme-dark .bg-green-100,
+.portal-theme-dark .hover\:bg-emerald-50:hover,
+.portal-theme-dark .hover\:bg-emerald-100:hover,
+.portal-theme-dark .hover\:bg-green-50:hover,
+.portal-theme-dark .hover\:bg-green-100:hover {
+  background-color: #123226 !important;
+}
+
+.portal-theme-dark .bg-amber-50,
+.portal-theme-dark .bg-amber-100,
+.portal-theme-dark .bg-yellow-50,
+.portal-theme-dark .bg-yellow-100,
+.portal-theme-dark .hover\:bg-amber-50:hover,
+.portal-theme-dark .hover\:bg-amber-100:hover,
+.portal-theme-dark .hover\:bg-yellow-50:hover,
+.portal-theme-dark .hover\:bg-yellow-100:hover {
+  background-color: #3b2a12 !important;
 }
 
 .portal-theme-dark .border-slate-100,
@@ -113,8 +173,21 @@ input[type="number"]::-webkit-inner-spin-button {
 .portal-theme-dark .border-red-100,
 .portal-theme-dark .border-red-200,
 .portal-theme-dark .border-blue-100,
+.portal-theme-dark .border-blue-200,
+.portal-theme-dark .border-amber-100,
 .portal-theme-dark .border-amber-200,
-.portal-theme-dark .border-emerald-200 {
+.portal-theme-dark .border-emerald-100,
+.portal-theme-dark .border-emerald-200,
+.portal-theme-dark .border-green-100,
+.portal-theme-dark .border-green-200,
+.portal-theme-dark .border-yellow-100,
+.portal-theme-dark .border-yellow-200,
+.portal-theme-dark .border-dashed {
+  border-color: #334155 !important;
+}
+
+.portal-theme-dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+.portal-theme-dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
   border-color: #334155 !important;
 }
 
@@ -122,15 +195,55 @@ input[type="number"]::-webkit-inner-spin-button {
 .portal-theme-dark .text-slate-950,
 .portal-theme-dark .text-slate-900,
 .portal-theme-dark .text-slate-800,
-.portal-theme-dark .text-slate-700,
-.portal-theme-dark .font-bold {
+.portal-theme-dark .text-slate-700 {
   color: #f8fafc !important;
 }
 
 .portal-theme-dark .text-slate-600,
 .portal-theme-dark .text-slate-500,
+.portal-theme-dark .text-slate-400,
 .portal-theme-dark .text-muted {
   color: #cbd5e1 !important;
+}
+
+.portal-theme-dark .text-civic,
+.portal-theme-dark .text-red-600,
+.portal-theme-dark .text-red-700,
+.portal-theme-dark .text-red-800,
+.portal-theme-dark .text-red-900,
+.portal-theme-dark .text-red-950 {
+  color: #fda4af !important;
+}
+
+.portal-theme-dark .text-blue-600,
+.portal-theme-dark .text-blue-700,
+.portal-theme-dark .text-blue-800,
+.portal-theme-dark .text-blue-900,
+.portal-theme-dark .text-blue-950 {
+  color: #93c5fd !important;
+}
+
+.portal-theme-dark .text-emerald-600,
+.portal-theme-dark .text-emerald-700,
+.portal-theme-dark .text-emerald-800,
+.portal-theme-dark .text-emerald-900,
+.portal-theme-dark .text-green-600,
+.portal-theme-dark .text-green-700,
+.portal-theme-dark .text-green-800,
+.portal-theme-dark .text-green-900 {
+  color: #86efac !important;
+}
+
+.portal-theme-dark .text-amber-600,
+.portal-theme-dark .text-amber-700,
+.portal-theme-dark .text-amber-800,
+.portal-theme-dark .text-amber-900,
+.portal-theme-dark .text-amber-950,
+.portal-theme-dark .text-yellow-600,
+.portal-theme-dark .text-yellow-700,
+.portal-theme-dark .text-yellow-800,
+.portal-theme-dark .text-yellow-900 {
+  color: #fcd34d !important;
 }
 
 .portal-theme-dark input,
@@ -141,10 +254,62 @@ input[type="number"]::-webkit-inner-spin-button {
   color: #f8fafc !important;
 }
 
+.portal-theme-dark input::placeholder,
+.portal-theme-dark textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+.portal-theme-dark input[type="date"] {
+  color-scheme: dark;
+}
+
+.portal-theme-dark .ring-red-50,
+.portal-theme-dark .ring-red-100,
+.portal-theme-dark .ring-red-200,
+.portal-theme-dark .ring-blue-100,
+.portal-theme-dark .ring-blue-200,
+.portal-theme-dark .ring-slate-100,
+.portal-theme-dark .ring-slate-200,
+.portal-theme-dark .ring-slate-300 {
+  --tw-ring-color: #334155 !important;
+}
+
 .portal-theme-dark .shadow-sm,
 .portal-theme-dark .shadow-md,
+.portal-theme-dark .shadow-lg,
+.portal-theme-dark .shadow-xl,
 .portal-theme-dark .shadow-2xl {
-  --tw-shadow-color: rgb(2 6 23 / 0.45) !important;
+  --tw-shadow-color: rgb(2 6 23 / 0.7) !important;
+}
+
+.portal-theme-dark table,
+.portal-theme-dark thead,
+.portal-theme-dark tbody {
+  color: #e2e8f0;
+}
+
+.portal-theme-dark tr:hover,
+.portal-theme-dark .hover\:bg-white:hover {
+  background-color: #1e293b !important;
+}
+
+.portal-theme-dark .from-wine {
+  --tw-gradient-from: #111827 var(--tw-gradient-from-position) !important;
+  --tw-gradient-to: rgb(17 24 39 / 0) var(--tw-gradient-to-position) !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+}
+
+.portal-theme-dark .to-civic {
+  --tw-gradient-to: #334155 var(--tw-gradient-to-position) !important;
+}
+
+.portal-theme-dark .bg-civic,
+.portal-theme-dark .group:hover .group-hover\:bg-civic {
+  background-color: #475569 !important;
+}
+
+.portal-theme-dark .group:hover .group-hover\:text-white {
+  color: #f8fafc !important;
 }
 
 .portal-theme-dark aside {
