@@ -12,7 +12,6 @@ import { DllSubmissionsPage } from "./pages/DllSubmissionsPage";
 import { EnrollmentPage } from "./pages/EnrollmentPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { GradeComputationPage } from "./pages/GradeComputationPage";
-import { GradeSubmissionsPage } from "./pages/GradeSubmissionsPage";
 import { GradeSummaryPage } from "./pages/GradeSummaryPage";
 import { LoadAssignmentPage } from "./pages/LoadAssignmentPage";
 import { LoadingDashboardPage } from "./pages/LoadingDashboardPage";
@@ -89,9 +88,6 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute requiredModule="grade_computation" />}>
             <Route path="/grade-computation" element={<GradeComputationPage />} />
-          </Route>
-          <Route element={<ProtectedRoute requiredModule="grade_submissions" />}>
-            <Route path="/grade-submissions" element={<GradeSubmissionsPage />} />
           </Route>
           <Route element={<ProtectedRoute requiredModule="grade_summary" />}>
             <Route path="/grade-summary" element={<GradeSummaryPage />} />

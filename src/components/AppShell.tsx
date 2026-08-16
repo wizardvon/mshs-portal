@@ -10,7 +10,6 @@ import {
   FileSpreadsheet,
   FileCheck2,
   FileText,
-  FilePenLine,
   GitBranch,
   GraduationCap,
   Eye,
@@ -61,7 +60,6 @@ export function AppShell() {
     canSee("tosia_pro") ||
     canSee("mps") ||
     canSee("grade_computation") ||
-    canSee("grade_submissions") ||
     canSee("grade_summary");
   const showMonitoringGroup =
     canSee("observations") ||
@@ -147,7 +145,6 @@ export function AppShell() {
             {canSee("tosia_pro") && <SidebarLink icon={ClipboardList} label="TOSIA Pro" onClick={closeSidebar} to="/tosia-pro" />}
             {canSee("mps") && <SidebarLink icon={BarChart3} label="MPS" onClick={closeSidebar} to="/mps" />}
             {canSee("grade_computation") && <SidebarLink icon={Calculator} label="Computation of Grades" onClick={closeSidebar} to="/grade-computation" />}
-            {canSee("grade_submissions") && <SidebarLink icon={FilePenLine} label="Grade Submission" onClick={closeSidebar} to="/grade-submissions" />}
             {canSee("grade_summary") && <SidebarLink icon={ClipboardList} label="Summary of Grades" onClick={closeSidebar} to="/grade-summary" />}
             {showMonitoringGroup && <SidebarSectionLabel>Monitoring</SidebarSectionLabel>}
             {canSee("observations") && <SidebarLink icon={Eye} label="Observation & Coaching" onClick={closeSidebar} to="/observations" />}

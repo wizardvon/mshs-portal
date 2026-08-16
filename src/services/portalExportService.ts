@@ -19,7 +19,7 @@ const portalExportModules: ExportModule[] = [
   { sheetName: "Loading", collections: ["loadAssignments", "ancillaryLoads"] },
   { sheetName: "Schedules", collections: ["classSchedules", "savedSchedules"] },
   { sheetName: "Enrollment", collections: ["enrollmentStudents", "classEnrollments"] },
-  { sheetName: "Grades", collections: ["gradeSubmissions"] },
+  { sheetName: "Grades", collections: ["gradeComputations", "gradeComputationSettings"] },
   { sheetName: "DLL", collections: ["dllRequests", "dllSubmissions"] },
   { sheetName: "MPS", collections: ["mpsRequests", "mpsSubmissions"] },
   { sheetName: "Documents", collections: ["documentRequests", "documentRequestSubmissions"] },

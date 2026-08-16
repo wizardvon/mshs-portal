@@ -38,12 +38,50 @@ function getFirestoreErrorCode(caught: unknown): string {
   return "cause" in caught ? getFirestoreErrorCode(caught.cause) : "";
 }
 
+class GradeComputationPartialSaveError extends Error {
+  readonly cause: unknown;
+  readonly savedCount: number;
+  readonly studentName: string;
+  readonly totalCount: number;
+
+  constructor({
+    cause,
+    savedCount,
+    studentName,
+    totalCount,
+  }: {
+    cause: unknown;
+    savedCount: number;
+    studentName: string;
+    totalCount: number;
+  }) {
+    super(`Unable to save the computed grade for ${studentName}.`);
+    this.name = "GradeComputationPartialSaveError";
+    this.cause = cause;
+    this.savedCount = savedCount;
+    this.studentName = studentName;
+    this.totalCount = totalCount;
+  }
+}
+
 export function getGradeComputationErrorMessage(
   caught: unknown,
   action = "save the grade computation",
 ) {
+  if (caught instanceof GradeComputationPartialSaveError) {
+    const errorCode = getFirestoreErrorCode(caught.cause);
+    const savedSummary = caught.savedCount === 0
+      ? "No learner grades were saved."
+      : `${caught.savedCount} of ${caught.totalCount} learner grades were saved before the failure.`;
+    const rejectionSummary = errorCode
+      ? `Firestore rejected ${caught.studentName}'s grade (${errorCode}).`
+      : `Saving stopped at ${caught.studentName}.`;
+
+    return `${savedSummary} ${rejectionSummary} You can retry safely; already-saved learner records will be updated rather than duplicated.`;
+  }
+
   if (getFirestoreErrorCode(caught) === "permission-denied") {
-    return `Firestore rejected the request to ${action} (permission-denied). Your teacher account or subject-section assignment is not authorized by the deployed Firestore rules; the data was not saved.`;
+    return `Firestore rejected the request to ${action} (permission-denied). The request did not satisfy the deployed Firestore rules; the data was not saved. Verify that the account is approved, linked to the teacher record, and assigned to the selected subject-section.`;
   }
 
   const detail = caught instanceof Error ? caught.message : "Unknown Firestore error";
@@ -88,6 +126,37 @@ export const subscribeGradeComputationsByTeacher = (
     onError,
   );
 };
+
+export const subscribeGradeComputationsBySection = (
+  sectionId: string,
+  callback: (computations: GradeComputation[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe => {
+  if (!sectionId) {
+    callback([]);
+    return () => undefined;
+  }
+
+  const computationsQuery = query(
+    collection(db, "gradeComputations"),
+    where("sectionId", "==", sectionId),
+  );
+
+  return onSnapshot(
+    computationsQuery,
+    (snapshot) => callback(snapshot.docs.map((item) => item.data() as GradeComputation)),
+    onError,
+  );
+};
+
+export const subscribeAllGradeComputations = (
+  callback: (computations: GradeComputation[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe => onSnapshot(
+  query(collection(db, "gradeComputations")),
+  (snapshot) => callback(snapshot.docs.map((item) => item.data() as GradeComputation)),
+  onError,
+);
 
 export const subscribeGradeComputationSettings = (
   assignmentId: string,
@@ -190,61 +259,21 @@ export async function upsertGradeComputations(
     exists: boolean;
   }>,
 ) {
+  const computationIds: string[] = [];
+
   for (const { computation, exists } of computations) {
     try {
-      await upsertGradeComputation(computation, exists);
+      computationIds.push(await upsertGradeComputation(computation, exists));
     } catch (caught) {
       console.error(`Unable to save computation for ${computation.studentName}`, caught);
-      throw caught;
+      throw new GradeComputationPartialSaveError({
+        cause: caught,
+        savedCount: computationIds.length,
+        studentName: computation.studentName,
+        totalCount: computations.length,
+      });
     }
   }
-}
 
-export async function saveGradeComputationsAndSettings(
-  settings: GradeComputationSettingsWrite,
-  settingsExists: boolean,
-  computations: Array<{
-    computation: GradeComputationWrite;
-    exists: boolean;
-  }>,
-) {
-  const settingsId = getGradeComputationSettingsId(settings.assignmentId);
-  const settingsRef = doc(db, "gradeComputationSettings", settingsId);
-  const computationWrites = computations.map(({ computation, exists }) => {
-    const computationId = getGradeComputationId(
-      computation.assignmentId,
-      computation.enrollmentId,
-    );
-    return {
-      computation,
-      computationId,
-      exists,
-      ref: doc(db, "gradeComputations", computationId),
-    };
-  });
-  const batch = writeBatch(db);
-
-  batch.set(settingsRef, cleanObject({
-    ...settings,
-    settingsId,
-    ...(settingsExists ? {} : { createdAt: serverTimestamp() }),
-    updatedAt: serverTimestamp(),
-  }), { merge: true });
-
-  computationWrites.forEach((item) => {
-    batch.set(item.ref, cleanObject({
-      ...item.computation,
-      computationId: item.computationId,
-      submittedAt: serverTimestamp(),
-      ...(item.exists ? {} : { createdAt: serverTimestamp() }),
-      updatedAt: serverTimestamp(),
-    }), { merge: true });
-  });
-
-  await batch.commit();
-
-  return {
-    settingsId,
-    computationIds: computationWrites.map((item) => item.computationId),
-  };
+  return computationIds;
 }

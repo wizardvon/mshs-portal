@@ -592,41 +592,33 @@ service cloud.firestore {
         && request.resource.data.weights.written + request.resource.data.weights.performance + request.resource.data.weights.exam == 100;
     }
 
-    function validGradeComputationWrittenScores(scores, requirePositive, requireAll) {
-      return scores is map
-        && scores.keys().hasOnly(["ww1", "ww2", "ww3", "ww4", "ww5"])
-        && (requireAll ? scores.keys().hasAll(["ww1", "ww2", "ww3", "ww4", "ww5"]) : scores.keys().hasAny(["ww1", "ww2", "ww3", "ww4", "ww5"]))
-        && (!scores.keys().hasAny(["ww1"]) || (scores.ww1 is number && (requirePositive ? scores.ww1 > 0 : scores.ww1 >= 0)))
-        && (!scores.keys().hasAny(["ww2"]) || (scores.ww2 is number && (requirePositive ? scores.ww2 > 0 : scores.ww2 >= 0)))
-        && (!scores.keys().hasAny(["ww3"]) || (scores.ww3 is number && (requirePositive ? scores.ww3 > 0 : scores.ww3 >= 0)))
-        && (!scores.keys().hasAny(["ww4"]) || (scores.ww4 is number && (requirePositive ? scores.ww4 > 0 : scores.ww4 >= 0)))
-        && (!scores.keys().hasAny(["ww5"]) || (scores.ww5 is number && (requirePositive ? scores.ww5 > 0 : scores.ww5 >= 0)));
-    }
-
-    function validGradeComputationPerformanceScores(scores, requirePositive, requireAll) {
-      return scores is map
-        && scores.keys().hasOnly(["pt1", "pt2", "pt3"])
-        && (requireAll ? scores.keys().hasAll(["pt1", "pt2", "pt3"]) : scores.keys().hasAny(["pt1", "pt2", "pt3"]))
-        && (!scores.keys().hasAny(["pt1"]) || (scores.pt1 is number && (requirePositive ? scores.pt1 > 0 : scores.pt1 >= 0)))
-        && (!scores.keys().hasAny(["pt2"]) || (scores.pt2 is number && (requirePositive ? scores.pt2 > 0 : scores.pt2 >= 0)))
-        && (!scores.keys().hasAny(["pt3"]) || (scores.pt3 is number && (requirePositive ? scores.pt3 > 0 : scores.pt3 >= 0)));
-    }
-
-    function validGradeComputationExamScores(scores, requirePositive, requireAll) {
-      return scores is map
-        && scores.keys().hasOnly(["s1", "s2", "tt"])
-        && (requireAll ? scores.keys().hasAll(["s1", "s2", "tt"]) : scores.keys().hasAny(["s1", "s2", "tt"]))
-        && (!scores.keys().hasAny(["s1"]) || (scores.s1 is number && (requirePositive ? scores.s1 > 0 : scores.s1 >= 0)))
-        && (!scores.keys().hasAny(["s2"]) || (scores.s2 is number && (requirePositive ? scores.s2 > 0 : scores.s2 >= 0)))
-        && (!scores.keys().hasAny(["tt"]) || (scores.tt is number && (requirePositive ? scores.tt > 0 : scores.tt >= 0)));
-    }
-
     function validGradeComputationHighestScores() {
-      return request.resource.data.highestScores is map
-        && request.resource.data.highestScores.keys().hasOnly(["written", "performance", "exam"])
-        && validGradeComputationWrittenScores(request.resource.data.highestScores.written, true, true)
-        && validGradeComputationPerformanceScores(request.resource.data.highestScores.performance, true, true)
-        && validGradeComputationExamScores(request.resource.data.highestScores.exam, true, true);
+      let scores = request.resource.data.highestScores;
+      let written = scores.written;
+      let performance = scores.performance;
+      let exam = scores.exam;
+      return scores is map
+        && scores.keys().hasOnly(["written", "performance", "exam"])
+        && written is map
+        && written.keys().hasOnly(["ww1", "ww2", "ww3", "ww4", "ww5"])
+        && written.keys().hasAll(["ww1", "ww2", "ww3", "ww4", "ww5"])
+        && written.ww1 is number && written.ww1 > 0
+        && written.ww2 is number && written.ww2 > 0
+        && written.ww3 is number && written.ww3 > 0
+        && written.ww4 is number && written.ww4 > 0
+        && written.ww5 is number && written.ww5 > 0
+        && performance is map
+        && performance.keys().hasOnly(["pt1", "pt2", "pt3"])
+        && performance.keys().hasAll(["pt1", "pt2", "pt3"])
+        && performance.pt1 is number && performance.pt1 > 0
+        && performance.pt2 is number && performance.pt2 > 0
+        && performance.pt3 is number && performance.pt3 > 0
+        && exam is map
+        && exam.keys().hasOnly(["s1", "s2", "tt"])
+        && exam.keys().hasAll(["s1", "s2", "tt"])
+        && exam.s1 is number && exam.s1 > 0
+        && exam.s2 is number && exam.s2 > 0
+        && exam.tt is number && exam.tt > 0;
     }
 
     function validGradeComputationComponent(component) {
@@ -643,32 +635,42 @@ service cloud.firestore {
     }
 
     function validGradeComputationItemScores() {
-      return validGradeComputationWrittenScores(request.resource.data.written.itemScores, false, false)
-        && validGradeComputationPerformanceScores(request.resource.data.performance.itemScores, false, false)
-        && validGradeComputationExamScores(request.resource.data.exam.itemScores, false, false);
+      let written = request.resource.data.written.itemScores;
+      let performance = request.resource.data.performance.itemScores;
+      let exam = request.resource.data.exam.itemScores;
+      return written is map
+        && written.keys().hasOnly(["ww1", "ww2", "ww3", "ww4", "ww5"])
+        && written.keys().hasAny(["ww1", "ww2", "ww3", "ww4", "ww5"])
+        && performance is map
+        && performance.keys().hasOnly(["pt1", "pt2", "pt3"])
+        && performance.keys().hasAny(["pt1", "pt2", "pt3"])
+        && exam is map
+        && exam.keys().hasOnly(["s1", "s2", "tt"])
+        && exam.keys().hasAny(["s1", "s2", "tt"]);
+    }
+
+    function usesSavedGradeComputationSettings() {
+      let settings = get(
+        /databases/$(database)/documents/gradeComputationSettings/$(request.resource.data.assignmentId)
+      ).data;
+      return request.resource.data.weights == settings.weights
+        && request.resource.data.highestScores == settings.highestScores;
     }
 
     function validGradeComputationBase(computationId) {
       return request.resource.data.computationId == computationId
         && computationId == request.resource.data.assignmentId + "__" + request.resource.data.enrollmentId
-        && request.resource.data.assignmentId is string
         && request.resource.data.classEnrollmentId is string
         && request.resource.data.enrollmentId is string
         && request.resource.data.lrn is string
         && request.resource.data.studentName is string
-        && request.resource.data.schoolYear is string
-        && request.resource.data.term in ["1st Term", "2nd Term", "3rd Term"]
-        && request.resource.data.teacherId is string
         && request.resource.data.teacherName is string
-        && request.resource.data.subjectId is string
         && request.resource.data.subjectCode is string
         && request.resource.data.subjectName is string
-        && request.resource.data.sectionId is string
         && request.resource.data.sectionName is string
         && request.resource.data.gradeLevel is string
         && request.resource.data.strand is string
-        && validGradeComputationWeights()
-        && validGradeComputationHighestScores()
+        && usesSavedGradeComputationSettings()
         && validGradeComputationComponent(request.resource.data.written)
         && validGradeComputationComponent(request.resource.data.performance)
         && validGradeComputationComponent(request.resource.data.exam)
@@ -1868,22 +1870,16 @@ service cloud.firestore {
     match /gradeComputations/{computationId} {
       allow read: if canSubmitForTeacher(resource.data.teacherId)
         || canViewGradeSummary(resource.data);
-      allow create: if canSubmitForTeacher(request.resource.data.teacherId)
-        && validGradeComputationCreate(computationId);
-      allow update: if canSubmitForTeacher(resource.data.teacherId)
-        && canSubmitForTeacher(request.resource.data.teacherId)
-        && validGradeComputationUpdate(computationId);
+      allow create: if validGradeComputationCreate(computationId);
+      allow update: if validGradeComputationUpdate(computationId);
       allow delete: if isSuperAdmin();
     }
 
     match /gradeComputationSettings/{settingsId} {
       allow read: if canSubmitForTeacher(resource.data.teacherId)
         || canViewGradeSummary(resource.data);
-      allow create: if canSubmitForTeacher(request.resource.data.teacherId)
-        && validGradeComputationSettingsCreate(settingsId);
-      allow update: if canSubmitForTeacher(resource.data.teacherId)
-        && canSubmitForTeacher(request.resource.data.teacherId)
-        && validGradeComputationSettingsUpdate(settingsId);
+      allow create: if validGradeComputationSettingsCreate(settingsId);
+      allow update: if validGradeComputationSettingsUpdate(settingsId);
       allow delete: if isSuperAdmin();
     }
 

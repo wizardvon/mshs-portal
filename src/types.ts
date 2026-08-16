@@ -24,7 +24,6 @@ export type AppModule =
   | "tosia_pro"
   | "mps"
   | "grade_computation"
-  | "grade_submissions"
   | "grade_summary"
   | "observations"
   | "personnel_attendance"

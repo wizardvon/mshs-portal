@@ -525,31 +525,6 @@ export type TosiaAssessment = {
   updatedAt?: Timestamp;
 };
 
-export type GradeSubmission = {
-  gradeSubmissionId: string;
-  assignmentId: string;
-  classEnrollmentId: string;
-  enrollmentId: string;
-  lrn: string;
-  studentName: string;
-  schoolYear: string;
-  term: AcademicTerm;
-  teacherId: string;
-  teacherName: string;
-  subjectId: string;
-  subjectCode: string;
-  subjectName: string;
-  sectionId: string;
-  sectionName: string;
-  gradeLevel: string;
-  strand: string;
-  grade: number;
-  submittedBy: string;
-  submittedAt?: Timestamp;
-  createdAt?: Timestamp;
-  updatedAt?: Timestamp;
-};
-
 export type GradeComputationWeights = {
   written: number;
   performance: number;

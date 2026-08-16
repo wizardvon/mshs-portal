@@ -5,9 +5,9 @@ import { SummaryCard } from "../components/common/SummaryCard";
 import { useAuth } from "../providers/AuthProvider";
 import { subscribeClassEnrollments, subscribeEnrollmentStudents } from "../services/enrollmentService";
 import {
-  subscribeAllGradeSubmissions,
-  subscribeGradeSubmissionsBySection,
-} from "../services/gradeSubmissionService";
+  subscribeAllGradeComputations,
+  subscribeGradeComputationsBySection,
+} from "../services/gradeComputationService";
 import { subscribeSections } from "../services/sectionService";
 import { defaultAcademicSettings, subscribeAcademicSettings } from "../services/settingsService";
 import { subscribeSubjects } from "../services/subjectService";
@@ -16,7 +16,7 @@ import type {
   AcademicTerm,
   ClassEnrollment,
   EnrollmentStudent,
-  GradeSubmission,
+  GradeComputation,
   Section,
   Subject,
 } from "../types/loading";
@@ -89,7 +89,7 @@ export function GradeSummaryPage() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [students, setStudents] = useState<EnrollmentStudent[]>([]);
   const [classEnrollments, setClassEnrollments] = useState<ClassEnrollment[]>([]);
-  const [gradeSubmissions, setGradeSubmissions] = useState<GradeSubmission[]>([]);
+  const [gradeComputations, setGradeComputations] = useState<GradeComputation[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState("");
 
   useEffect(() => subscribeAcademicSettings(setAcademicSettings), []);
@@ -98,8 +98,8 @@ export function GradeSummaryPage() {
   useEffect(() => subscribeEnrollmentStudents(setStudents), []);
   useEffect(() => subscribeClassEnrollments(setClassEnrollments), []);
   useEffect(() => {
-    if (canViewAll) return subscribeAllGradeSubmissions(setGradeSubmissions);
-    return subscribeGradeSubmissionsBySection(advisorySectionId, setGradeSubmissions);
+    if (canViewAll) return subscribeAllGradeComputations(setGradeComputations);
+    return subscribeGradeComputationsBySection(advisorySectionId, setGradeComputations);
   }, [advisorySectionId, canViewAll]);
 
   useEffect(() => {
@@ -160,13 +160,13 @@ export function GradeSummaryPage() {
 
   const sectionGrades = useMemo(
     () =>
-      gradeSubmissions.filter(
-        (submission) =>
-          submission.schoolYear === schoolYear &&
-          submission.term === term &&
-          submission.sectionId === selectedSectionId,
+      gradeComputations.filter(
+        (computation) =>
+          computation.schoolYear === schoolYear &&
+          computation.term === term &&
+          computation.sectionId === selectedSectionId,
       ),
-    [gradeSubmissions, schoolYear, selectedSectionId, term],
+    [gradeComputations, schoolYear, selectedSectionId, term],
   );
 
   const sectionClassEnrollments = useMemo(
@@ -193,12 +193,12 @@ export function GradeSummaryPage() {
       });
     });
 
-    sectionGrades.forEach((submission) => {
-      subjectColumnsById.set(submission.subjectId, {
-        subjectId: submission.subjectId,
-        subjectName: submission.subjectName,
-        subjectCode: submission.subjectCode,
-        units: getSubjectUnits(subjectsById.get(submission.subjectId)),
+    sectionGrades.forEach((computation) => {
+      subjectColumnsById.set(computation.subjectId, {
+        subjectId: computation.subjectId,
+        subjectName: computation.subjectName,
+        subjectCode: computation.subjectCode,
+        units: getSubjectUnits(subjectsById.get(computation.subjectId)),
       });
     });
 
@@ -222,9 +222,9 @@ export function GradeSummaryPage() {
   const gradesByStudentSubject = useMemo(
     () =>
       new Map(
-        sectionGrades.map((submission) => [
-          `${submission.enrollmentId}:${submission.subjectId}`,
-          submission,
+        sectionGrades.map((computation) => [
+          `${computation.enrollmentId}:${computation.subjectId}`,
+          computation,
         ]),
       ),
     [sectionGrades],
@@ -238,7 +238,7 @@ export function GradeSummaryPage() {
         if (!grade || subject.units <= 0) return total;
 
         return {
-          weightedGrades: total.weightedGrades + Number(grade.grade || 0) * subject.units,
+          weightedGrades: total.weightedGrades + Number(grade.finalGrade || 0) * subject.units,
           units: total.units + subject.units,
         };
       },
@@ -253,7 +253,7 @@ export function GradeSummaryPage() {
     const hasSubject = enrollmentsByStudentSubject.has(key);
     const grade = gradesByStudentSubject.get(key);
 
-    if (grade) return String(grade.grade);
+    if (grade) return String(grade.finalGrade);
     if (hasSubject) return "Pending";
     return "-";
   }
@@ -435,7 +435,7 @@ export function GradeSummaryPage() {
             </div>
           )
         }
-        description="Read-only section grade summary from submitted subject grades."
+        description="Read-only section grade summary from the final grades saved in Computation of Grades."
         title="Summary of Grades"
       />
 
@@ -480,7 +480,7 @@ export function GradeSummaryPage() {
           <div className="grid gap-4 sm:grid-cols-3">
             <SummaryCard detail="selected section" icon={Users} label="Students" value={sectionStudents.length} />
             <SummaryCard detail="subjects found" icon={BookOpen} label="Subjects" value={subjectColumns.length} />
-            <SummaryCard detail={`${encodedCount}/${expectedCount} encoded`} icon={ClipboardList} label="Grades" value={encodedCount} />
+            <SummaryCard detail={`${encodedCount}/${expectedCount} computed`} icon={ClipboardList} label="Grades" value={encodedCount} />
           </div>
 
           {selectedSection ? (
@@ -535,7 +535,7 @@ export function GradeSummaryPage() {
                             return (
                               <td className="px-3 py-3 align-middle" key={subject.subjectId}>
                                 {grade ? (
-                                  <span className="font-bold text-slate-950">{grade.grade}</span>
+                                  <span className="font-bold text-slate-950">{grade.finalGrade}</span>
                                 ) : hasSubject ? (
                                   <span className="text-xs font-medium text-amber-700">Pending</span>
                                 ) : (

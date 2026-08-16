@@ -1,5 +1,5 @@
-import { BookOpen, Calculator, CheckCircle2, Save, Users } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { BookOpen, Calculator, CheckCircle2, Printer, Save, Users } from "lucide-react";
+import { Fragment, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "../components/common/PageHeader";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { SummaryCard } from "../components/common/SummaryCard";
@@ -10,9 +10,9 @@ import {
   getGradeComputationId,
   getGradeComputationErrorMessage,
   saveGradeComputationSettings,
-  saveGradeComputationsAndSettings,
   subscribeGradeComputationsByTeacher,
   subscribeGradeComputationSettings,
+  upsertGradeComputations,
 } from "../services/gradeComputationService";
 import { defaultAcademicSettings, subscribeAcademicSettings } from "../services/settingsService";
 import { subscribeSections } from "../services/sectionService";
@@ -91,6 +91,50 @@ const componentSlots: Record<ComponentKey, Array<{ id: SlotId; label: string }>>
 
 const allSlots = Object.values(componentSlots).flat();
 
+const transmutationTable = [
+  [0, 60],
+  [4.68, 61],
+  [9.35, 62],
+  [14.01, 63],
+  [18.68, 64],
+  [23.35, 65],
+  [28.01, 66],
+  [32.68, 67],
+  [37.34, 68],
+  [42.01, 69],
+  [46.67, 70],
+  [51.34, 71],
+  [56.01, 72],
+  [60.67, 73],
+  [65.34, 74],
+  [70, 75],
+  [71.18, 76],
+  [72.36, 77],
+  [73.54, 78],
+  [74.72, 79],
+  [75.9, 80],
+  [77.08, 81],
+  [78.26, 82],
+  [79.44, 83],
+  [80.62, 84],
+  [81.8, 85],
+  [82.98, 86],
+  [84.16, 87],
+  [85.34, 88],
+  [86.52, 89],
+  [87.7, 90],
+  [88.88, 91],
+  [90.06, 92],
+  [91.24, 93],
+  [92.42, 94],
+  [93.6, 95],
+  [94.78, 96],
+  [95.96, 97],
+  [97.14, 98],
+  [98.32, 99],
+  [99.5, 100],
+] as const;
+
 function normalizeSex(value?: string) {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (["m", "male", "lalaki"].includes(normalized)) return "male";
@@ -131,6 +175,31 @@ function parseNonNegativeNumber(value: string) {
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+export function transmuteInitialGrade(initialGrade: number) {
+  const normalizedGrade = Math.min(100, Math.max(0, round2(initialGrade)));
+  let finalGrade = 60;
+
+  for (const [minimumInitialGrade, transmutedGrade] of transmutationTable) {
+    if (normalizedGrade < minimumInitialGrade) break;
+    finalGrade = transmutedGrade;
+  }
+
+  return finalGrade;
+}
+
+function escapeHtml(value: string | number) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function formatPrintNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 export function blankDraft(): StudentDraft {
@@ -272,7 +341,7 @@ export function getComputedGrade(
     performance,
     exam,
     initialGrade,
-    finalGrade: Math.round(initialGrade),
+    finalGrade: transmuteInitialGrade(initialGrade),
   };
 }
 
@@ -341,6 +410,7 @@ export function GradeComputationPage() {
   const dirtyDraftIds = useRef(new Set<string>());
   const weightsAreDirty = useRef(false);
   const highestScoresAreDirty = useRef(false);
+  const scoreInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => subscribeAcademicSettings(setAcademicSettings), []);
   useEffect(() => subscribeTeachers(setTeachers), []);
@@ -595,6 +665,11 @@ export function GradeComputationPage() {
   const parsedHighestScores = parseHighestScores(highestScores);
   const weightTotal = weights.written + weights.performance + weights.exam;
   const weightsAreValid = weightTotal === 100;
+  const hasSavedScoreSettings = Boolean(
+    selectedClass &&
+    selectedComputationSettings?.assignmentId === selectedClass.assignment.assignmentId,
+  );
+  const hasUnsavedScoreSettings = weightsAreDirty.current || highestScoresAreDirty.current;
   const isRestoringSelectedClass = Boolean(
     selectedClass &&
     (
@@ -604,7 +679,15 @@ export function GradeComputationPage() {
     )
   );
   const canSaveComputations =
-    Boolean(profile && assignedTeacherId && selectedClass && parsedHighestScores && weightsAreValid) &&
+    Boolean(
+      profile &&
+      assignedTeacherId &&
+      selectedClass &&
+      parsedHighestScores &&
+      weightsAreValid &&
+      hasSavedScoreSettings &&
+      !hasUnsavedScoreSettings
+    ) &&
     rosterRows.length > 0 &&
     !isRestoringSelectedClass &&
     !saving;
@@ -658,6 +741,22 @@ export function GradeComputationPage() {
     setError("");
   }
 
+  function handleScoreKeyDown(
+    event: KeyboardEvent<HTMLInputElement>,
+    rowIndex: number,
+    slotId: SlotId,
+  ) {
+    if (event.key !== "Enter") return;
+
+    event.preventDefault();
+    const nextRow = rosterRows[rowIndex + 1];
+    if (!nextRow) return;
+
+    const nextInput = scoreInputRefs.current[`${slotId}:${nextRow.classEnrollment.classEnrollmentId}`];
+    nextInput?.focus();
+    nextInput?.select();
+  }
+
   function buildComputation(row: RosterRow, computed: NonNullable<ReturnType<typeof getComputedGrade>>): Omit<GradeComputation, "computationId" | "submittedAt" | "createdAt" | "updatedAt"> {
     if (!profile || !user || !assignedTeacherId || !selectedClass) {
       throw new Error("Your user account must be linked to a teacher record before computing grades.");
@@ -707,6 +806,16 @@ export function GradeComputationPage() {
       return;
     }
 
+    if (!hasSavedScoreSettings) {
+      setError("Save the highest possible scores before saving computed grades.");
+      return;
+    }
+
+    if (hasUnsavedScoreSettings) {
+      setError("Save your changes to the percentages and highest possible scores before saving computed grades.");
+      return;
+    }
+
     const rowsToSave = rosterRows
       .map((row) => {
         const draft = drafts[row.classEnrollment.classEnrollmentId] ?? blankDraft();
@@ -727,9 +836,7 @@ export function GradeComputationPage() {
     setError("");
 
     try {
-      await saveGradeComputationsAndSettings(
-        buildScoreSettings(),
-        Boolean(selectedComputationSettings),
+      await upsertGradeComputations(
         rowsToSave.map(({ row, computed }) => ({
           computation: buildComputation(row, computed),
           exists: Boolean(row.existingComputation),
@@ -739,7 +846,7 @@ export function GradeComputationPage() {
       setMessage(`Saved ${rowsToSave.length} computed grade${rowsToSave.length === 1 ? "" : "s"}.`);
     } catch (caught) {
       console.error(caught);
-      setError(getGradeComputationErrorMessage(caught, "save computed grades and highest possible scores"));
+      setError(getGradeComputationErrorMessage(caught, "save computed grades"));
     } finally {
       setSaving(false);
     }
@@ -778,6 +885,8 @@ export function GradeComputationPage() {
       buildScoreSettings(),
       Boolean(selectedComputationSettings),
     );
+    weightsAreDirty.current = false;
+    highestScoresAreDirty.current = false;
 
     return successMessage ?? `Highest possible scores saved for ${selectedClass.subjectName} - ${selectedClass.sectionName}.`;
   }
@@ -795,6 +904,147 @@ export function GradeComputationPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function printSelectedComputation() {
+    if (!selectedClass) return;
+
+    const printWindow = window.open("", "_blank", "width=1200,height=850");
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const componentKeys: ComponentKey[] = ["written", "performance", "exam"];
+    const highestScoreCells = componentKeys
+      .map((component) => {
+        const slotCells = componentSlots[component]
+          .map((slot) => `<td class="center">${escapeHtml(highestScores[component][slot.id] || "")}</td>`)
+          .join("");
+        const highestTotal = componentSlots[component].reduce(
+          (total, slot) => total + (parseNonNegativeNumber(highestScores[component][slot.id]) ?? 0),
+          0,
+        );
+
+        return `${slotCells}<td class="center strong">${escapeHtml(formatPrintNumber(round2(highestTotal)))}</td><td class="center">100% / ${escapeHtml(formatPrintNumber(weights[component]))}</td>`;
+      })
+      .join("");
+
+    const rows = rosterRows.length
+      ? rosterRows
+          .map((row, index) => {
+            const draft = drafts[row.classEnrollment.classEnrollmentId] ?? blankDraft();
+            const computed = getComputedGrade(draft, weights, highestScores);
+            const componentCells = componentKeys
+              .map((component) => {
+                const slotCells = componentSlots[component]
+                  .map((slot) => `<td class="center">${escapeHtml(draft[slot.id])}</td>`)
+                  .join("");
+                const componentValue = computed?.[component];
+
+                return `${slotCells}<td class="center strong">${componentValue ? `${escapeHtml(formatPrintNumber(componentValue.score))}/${escapeHtml(formatPrintNumber(componentValue.maxScore))}` : ""}</td><td class="center">${componentValue ? `${escapeHtml(formatPrintNumber(componentValue.percentageScore))}% / ${escapeHtml(formatPrintNumber(componentValue.weightedScore))}` : ""}</td>`;
+              })
+              .join("");
+
+            return `<tr>
+              <td class="center">${index + 1}</td>
+              <td><strong>${escapeHtml(row.student?.displayName ?? row.classEnrollment.studentName)}</strong><br /><span class="muted">${escapeHtml(row.classEnrollment.lrn)}</span></td>
+              <td class="center">${escapeHtml(formatSex(row.student?.sex))}</td>
+              ${componentCells}
+              <td class="center strong">${computed ? escapeHtml(computed.initialGrade.toFixed(2)) : ""}</td>
+              <td class="center final-grade">${computed ? escapeHtml(computed.finalGrade) : ""}</td>
+            </tr>`;
+          })
+          .join("")
+      : `<tr><td class="center muted" colspan="22">No enrolled students found.</td></tr>`;
+
+    const componentHeadings = componentKeys
+      .map(
+        (component) =>
+          `<th class="center" colspan="${componentSlots[component].length + 2}">${escapeHtml(componentLabels[component])} (${escapeHtml(formatPrintNumber(weights[component]))}%)</th>`,
+      )
+      .join("");
+    const scoreHeadings = componentKeys
+      .map((component) =>
+        [
+          ...componentSlots[component].map((slot) => `<th class="center">${escapeHtml(slot.label)}</th>`),
+          `<th class="center">Total</th>`,
+          `<th class="center">PS / WS</th>`,
+        ].join(""),
+      )
+      .join("");
+
+    printWindow.document.write(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${escapeHtml(selectedClass.subjectName)} - ${escapeHtml(selectedClass.sectionName)} - Computation of Grades</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { color: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 7px; margin: 0; }
+      .page { padding: 8mm; }
+      header { border-bottom: 1.5px solid #0f172a; margin-bottom: 8px; padding-bottom: 6px; }
+      h1 { font-size: 16px; margin: 0 0 3px; }
+      p { margin: 2px 0; }
+      .muted { color: #475569; }
+      .legend { margin: 5px 0; }
+      table { border-collapse: collapse; table-layout: auto; width: 100%; }
+      thead { display: table-header-group; }
+      tr { break-inside: avoid; page-break-inside: avoid; }
+      th, td { border: 1px solid #94a3b8; padding: 3px 2px; vertical-align: middle; }
+      th { background: #e2e8f0; font-weight: 700; }
+      .hps td { background: #f8fafc; }
+      .center { text-align: center; }
+      .strong, .final-grade { font-weight: 700; }
+      .student-column { min-width: 34mm; }
+      .signature-grid { display: grid; gap: 24px; grid-template-columns: repeat(2, 1fr); margin: 24px auto 0; max-width: 150mm; }
+      .signature { border-top: 1px solid #0f172a; padding-top: 4px; text-align: center; }
+      .no-print { margin: 10px; padding: 8px 12px; }
+      @page { size: A4 landscape; margin: 0; }
+      @media print { .no-print { display: none; } }
+    </style>
+  </head>
+  <body>
+    <button class="no-print" onclick="window.print()">Print / Save as PDF</button>
+    <section class="page">
+      <header>
+        <h1>Computation of Grades</h1>
+        <p>School Year: ${escapeHtml(selectedClass.assignment.schoolYear)} | Term: ${escapeHtml(selectedClass.assignment.term)}</p>
+        <p>Teacher: ${escapeHtml(teacher?.fullName ?? profile?.fullName ?? "")}</p>
+        <p>Subject: ${escapeHtml(selectedClass.subjectName)} ${selectedClass.subjectCode ? `(${escapeHtml(selectedClass.subjectCode)})` : ""}</p>
+        <p>Section: ${escapeHtml(selectedClass.sectionName)} | Grade ${escapeHtml(selectedClass.assignment.gradeLevel)} | ${escapeHtml(selectedClass.assignment.strand)}</p>
+        <p class="muted">Printed: ${escapeHtml(new Date().toLocaleString())}</p>
+      </header>
+      <p class="legend"><strong>PS</strong> = Percentage Score; <strong>WS</strong> = Weighted Score. Final grades use the configured transmutation table.</p>
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2">No.</th>
+            <th class="student-column" rowspan="2">Student</th>
+            <th rowspan="2">Sex</th>
+            ${componentHeadings}
+            <th rowspan="2">Initial</th>
+            <th rowspan="2">Final</th>
+          </tr>
+          <tr>${scoreHeadings}</tr>
+          <tr class="hps">
+            <td class="center strong" colspan="3">Highest Possible Score</td>
+            ${highestScoreCells}
+            <td></td>
+            <td></td>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="signature-grid">
+        <div class="signature"><strong>${escapeHtml(teacher?.fullName ?? profile?.fullName ?? "")}</strong><br />Subject Teacher</div>
+        <div class="signature">Checked by</div>
+      </div>
+    </section>
+    <script>window.addEventListener("load", () => setTimeout(() => window.print(), 250));</script>
+  </body>
+</html>`);
+    printWindow.document.close();
   }
 
   return (
@@ -931,6 +1181,16 @@ export function GradeComputationPage() {
                     Complete all highest possible scores before saving computations.
                   </p>
                 )}
+                {parsedHighestScores && !hasSavedScoreSettings && (
+                  <p className="mt-2 text-sm font-medium text-amber-700">
+                    Save the highest possible scores before saving computed grades.
+                  </p>
+                )}
+                {hasSavedScoreSettings && hasUnsavedScoreSettings && (
+                  <p className="mt-2 text-sm font-medium text-amber-700">
+                    The percentage or highest-score changes are not saved yet. Save them before saving computed grades.
+                  </p>
+                )}
                 <div className="mt-4 flex justify-end">
                   <button
                     className="inline-flex h-10 items-center gap-2 rounded-md bg-civic px-4 text-sm font-semibold text-white hover:bg-civic/90 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
@@ -953,14 +1213,24 @@ export function GradeComputationPage() {
                       Grade {selectedClass.assignment.gradeLevel} / {selectedClass.assignment.strand} / {term}
                     </p>
                   </div>
-                  <button
-                    className="inline-flex h-10 items-center gap-2 rounded-md bg-civic px-4 text-sm font-semibold text-white hover:bg-civic/90 disabled:opacity-50"
-                    disabled={!canSaveComputations}
-                    onClick={() => void saveComputations()}
-                    type="button"
-                  >
-                    <Save size={16} /> {saving ? "Saving..." : "Save Computations"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isRestoringSelectedClass || rosterRows.length === 0}
+                      onClick={printSelectedComputation}
+                      type="button"
+                    >
+                      <Printer size={16} /> Print Computation
+                    </button>
+                    <button
+                      className="inline-flex h-10 items-center gap-2 rounded-md bg-civic px-4 text-sm font-semibold text-white hover:bg-civic/90 disabled:opacity-50"
+                      disabled={!canSaveComputations}
+                      onClick={() => void saveComputations()}
+                      type="button"
+                    >
+                      <Save size={16} /> {saving ? "Saving..." : "Save Computations"}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="overflow-x-auto">
@@ -1027,6 +1297,10 @@ export function GradeComputationPage() {
                                         }
                                         inputMode="decimal"
                                         onChange={(event) => updateDraft(row.classEnrollment.classEnrollmentId, slot.id, event.target.value)}
+                                        onKeyDown={(event) => handleScoreKeyDown(event, index, slot.id)}
+                                        ref={(element) => {
+                                          scoreInputRefs.current[`${slot.id}:${row.classEnrollment.classEnrollmentId}`] = element;
+                                        }}
                                         value={draft[slot.id]}
                                       />
                                     </td>
